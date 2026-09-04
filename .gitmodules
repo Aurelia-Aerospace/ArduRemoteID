@@ -3,10 +3,12 @@
 	url = https://github.com/opendroneid/opendroneid-core-c.git
 [submodule "modules/mavlink"]
 	path = modules/mavlink
-	url = https://github.com/ArduPilot/mavlink.git
+	url = https://github.com/Aurelia-Aerospace/mavlink.git
+	branch = px4_old
 [submodule "modules/DSDL"]
 	path = modules/DSDL
-	url = https://github.com/dronecan/DSDL.git
+	url = https://github.com/Aurelia-Aerospace/DSDL.git
+	branch = px4_old
 [submodule "modules/libcanard"]
 	path = modules/libcanard
 	url = https://github.com/dronecan/libcanard.git
