@@ -1,3 +1,4 @@
+#pragma once
 
 #include "CANDriver.h"
 #include "transport.h"
@@ -11,9 +12,7 @@
 #include <dronecan.remoteid.System.h>
 #include <dronecan.remoteid.OperatorID.h>
 #include <dronecan.remoteid.SecureCommand.h>
-
 #define CAN_POOL_SIZE 4096
-
 
 class DroneCAN : public Transport {
 public:
@@ -23,6 +22,7 @@ public:
 
 private:
     uint32_t last_node_status_ms;
+    uint32_t last_arm_status_ms;
     CANDriver can_driver;
     CanardInstance canard;
     uint32_t canard_memory_pool[CAN_POOL_SIZE/sizeof(uint32_t)];
@@ -59,6 +59,8 @@ private:
     void handle_Location(CanardRxTransfer* transfer);
     void handle_param_getset(CanardInstance* ins, CanardRxTransfer* transfer);
     void handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* transfer);
+    void handle_FltTime(CanardRxTransfer* transfer);
+    void handle_SerialNumber(CanardRxTransfer* transfer);
 
     void can_printf(const char *fmt, ...);
 
