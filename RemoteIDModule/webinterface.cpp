@@ -10,6 +10,8 @@
 #include "romfs.h"
 #include "check_firmware.h"
 #include "status.h"
+#include "led.h"
+#include <SPIFFS.h>
 
 static WebServer server(80);
 
@@ -141,15 +143,21 @@ void WebInterface::init(void)
                 Update.write(&ff, 1);
             }
             if (!CheckFirmware::check_OTA_next(partition_new_firmware, lead_bytes, lead_len)) {
+                led.set_state(Led::LedState::UPDATE_FAIL);
+                led.update();
                 Serial.printf("Update Failed: firmware checks have errors\n");
                 server.sendHeader("Connection", "close");
                 server.send(500, "text/plain","FAIL");
                 delay(5000);
             } else if (Update.end(true)) {
+                led.set_state(Led::LedState::UPDATE_SUCCESS);
+                led.update();
                 Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
                 server.sendHeader("Connection", "close");
                 server.send(200, "text/plain","OK");
             } else {
+                led.set_state(Led::LedState::UPDATE_FAIL);
+                led.update();
                 Update.printError(Serial);
                 Serial.printf("Update Failed: Update.end function has errors\n");
                 server.sendHeader("Connection", "close");
@@ -158,6 +166,81 @@ void WebInterface::init(void)
             }
         }
     });
+    
+    /*handling uploading spiffs files */
+    server.on("/update_spiffs", HTTP_POST, []() {
+        server.sendHeader("Connection", "close");
+        server.send(200, "text/plain","OK");
+        Serial.printf("Update succeded, rebooting...\n");
+        delay(1000);
+        ESP.restart();
+    }, [this]() {
+#if defined(BOARD_AURELIA_RID_S3)
+        HTTPUpload& upload = server.upload();
+        static const esp_partition_t *spiffs_partition=esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS,"spiffs");
+        if (upload.status == UPLOAD_FILE_START) {
+            Serial.printf("Update spiffs: %s\n", upload.filename.c_str());
+            offset = 0;
+            lead_len = 0;
+            if (spiffs_partition != NULL) {
+                SPIFFS.end();
+                esp_err_t err = esp_partition_erase_range(spiffs_partition,0,spiffs_partition->size);
+                if (err != ESP_OK) {
+                    Serial.println("Error deleting spiffs!");
+                    Serial.println(err);
+                }
+
+            }
+        } else if (upload.status == UPLOAD_FILE_WRITE) {
+            if (lead_len < sizeof(lead_bytes)) {
+                uint32_t n = sizeof(lead_bytes)-lead_len;
+                if (n > upload.currentSize) {
+                    n = upload.currentSize;
+                }
+                memcpy(&lead_bytes[lead_len], upload.buf, n);
+                lead_len += n;
+            }
+            if (spiffs_partition != NULL) {
+                esp_err_t err = esp_partition_write(spiffs_partition,offset,(const void *)upload.buf, upload.currentSize);
+                offset += upload.currentSize;
+                if (err != ESP_OK) {
+                    Serial.println("Error writing to SPIFFS partition!");
+                    Serial.println(err);
+                }
+            }
+        } else if (upload.status == UPLOAD_FILE_END) {
+            if (!CheckFirmware::check_OTA_next(spiffs_partition, lead_bytes, lead_len)) {
+                esp_err_t err = esp_partition_erase_range(spiffs_partition,0,spiffs_partition->size);
+                if (err != ESP_OK) {
+                    Serial.println("Error deleting spiffs!");
+                    Serial.println(err);
+                }
+                led.set_state(Led::LedState::UPDATE_FAIL);
+                led.update();
+                Serial.printf("Update Failed: file checks have errors\n");
+                server.sendHeader("Connection", "close");
+                server.send(500, "text/plain","FAIL");
+                delay(5000);
+                ESP.restart();
+            }else{
+                led.set_state(Led::LedState::UPDATE_SUCCESS);
+                led.update();
+                Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+                server.sendHeader("Connection", "close");
+                server.send(200, "text/plain","OK");
+            }
+        }
+    
+#else
+        led.set_state(Led::LedState::UPDATE_FAIL);
+        led.update();
+        Serial.printf("Update Failed: this hardware version is not compatible\n");
+        server.sendHeader("Connection", "close");
+        server.send(500, "text/plain","FAIL");
+        delay(5000);
+        ESP.restart();
+#endif
+        });
     Serial.printf("WAP started\n");
     server.begin();
 }
