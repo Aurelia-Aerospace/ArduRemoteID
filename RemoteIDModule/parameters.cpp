@@ -23,9 +23,9 @@ const Parameters::Param Parameters::params[] = {
     { "WIFI_BCN_RATE",     Parameters::ParamType::FLOAT,  (const void*)&g.wifi_beacon_rate,    0, 0, 5 },
     { "WIFI_POWER",        Parameters::ParamType::FLOAT,  (const void*)&g.wifi_power,       20, 2, 20 },
     { "BT4_RATE",          Parameters::ParamType::FLOAT,  (const void*)&g.bt4_rate,         1, 0, 5 },
-    { "BT4_POWER",         Parameters::ParamType::FLOAT,  (const void*)&g.bt4_power,        18, -27, 18 },
+    { "BT4_POWER",         Parameters::ParamType::FLOAT,  (const void*)&g.bt4_power,        18, -24, 18 },
     { "BT5_RATE",          Parameters::ParamType::FLOAT,  (const void*)&g.bt5_rate,         1, 0, 5 },
-    { "BT5_POWER",         Parameters::ParamType::FLOAT,  (const void*)&g.bt5_power,        18, -27, 18 },
+    { "BT5_POWER",         Parameters::ParamType::FLOAT,  (const void*)&g.bt5_power,        18, -24, 18 },
     { "WEBSERVER_EN",      Parameters::ParamType::UINT8,  (const void*)&g.webserver_enable, 1, 0, 1 },
     { "WIFI_SSID",         Parameters::ParamType::CHAR20, (const void*)&g.wifi_ssid, },
     { "WIFI_PASSWORD",     Parameters::ParamType::CHAR20, (const void*)&g.wifi_password,    0, 0, 0, PARAM_FLAG_PASSWORD, 8 },
@@ -38,10 +38,29 @@ const Parameters::Param Parameters::params[] = {
     { "PUBLIC_KEY5",       Parameters::ParamType::CHAR64, (const void*)&g.public_keys[4], },
     { "MAVLINK_SYSID",     Parameters::ParamType::UINT8,  (const void*)&g.mavlink_sysid,    0, 0, 254 },
     { "OPTIONS",           Parameters::ParamType::UINT8,  (const void*)&g.options,          0, 0, 254 },
-    { "TO_DEFAULTS",     Parameters::ParamType::UINT8,  (const void*)&g.to_factory_defaults,    0, 0, 1 }, //if set to 1, reset to factory defaults and make 0.
+#if defined(BOARD_AURELIA_RID_S3)
+    { "MIN_PRISON",        Parameters::ParamType::FLOAT,  (const void*)&g.min_prison_dis,        2.4, 0, 30},
+    { "MIN_LG_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_lg_airport_dis,        10.15, 0, 30},
+    { "MIN_MD_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_md_airport_dis,        5, 0, 30},
+    { "MIN_SM_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_sm_airport_dis,        3, 0, 30},
+    { "MIN_SP_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_sp_airport_dis,        5, 0, 30},
+    { "MIN_HB_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_hb_airport_dis,        5, 0, 30},
+    { "MIN_TEST_AIRPORT",  Parameters::ParamType::FLOAT,  (const void*)&g.min_test_airport_dis,        0, 0, 30},
+    { "MIN_HP_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_hp_airport_dis,        4.5, 0, 30},
+#endif
+    { "TO_DEFAULTS",       Parameters::ParamType::UINT8,  (const void*)&g.to_factory_defaults,    0, 0, 1 }, //if set to 1, reset to factory defaults and make 0.
     { "DONE_INIT",         Parameters::ParamType::UINT8,  (const void*)&g.done_init,        0, 0, 0, PARAM_FLAG_HIDDEN},
+    { "FLT_TIME",          Parameters::ParamType::UINT32,  (const void*)&g.flt_time,        0, 0, 946080000, PARAM_FLAG_HIDDEN},//30 years maximum
+    { "FLT_TIME_AUX",      Parameters::ParamType::UINT32,  (const void*)&g.flt_time_aux,        0, 0, 946080000, PARAM_FLAG_HIDDEN},//30 years maximum
     { "",                  Parameters::ParamType::NONE,   nullptr,  },
 };
+
+#if defined(BOARD_AURELIA_RID_S3)
+void Parameters::reset_min_test_distance(){
+    const Param *vp = find((char *)"MIN_TEST_AIRPORT");
+    vp->set_float(0);
+}
+#endif
 
 /*
   get count of parameters capable of being converted to load
@@ -352,6 +371,9 @@ void Parameters::init(void)
         nvs_flash_erase();
         esp_restart();
     }
+#if defined(BOARD_AURELIA_RID_S3)
+    reset_min_test_distance();
+#endif
 
     if (g.done_init == 0) {
         set_by_name_uint8("DONE_INIT", 1);
@@ -363,8 +385,18 @@ void Parameters::init(void)
 #else
         set_by_name_char64("PUBLIC_KEY3", ROMFS::find_string("public_keys/ArduPilot_public_key3.dat"));
 #endif
-
+#if defined(BOARD_AURELIA_RID_C3) || defined(BOARD_AURELIA_RID_S3)
+        set_by_name_char64("PUBLIC_KEY4", ROMFS::find_string("public_keys/AureliaKeys_public_key1.dat"));
+#endif
     }
+}
+
+int32_t Parameters::get_serial_number(){
+    char serial_n[6];
+    strncpy(serial_n, g.uas_id + 9, 5);//Imprimir uas_id
+    serial_n[5] = '\0';
+    int32_t sn  = atoi(serial_n);
+    return sn;
 }
 
 /*
@@ -378,6 +410,16 @@ bool Parameters::have_basic_id_info(void) const
 bool Parameters::have_basic_id_2_info(void) const
 {
     return strlen(g.uas_id_2) > 0 && g.id_type_2 > 0 && g.ua_type_2 > 0;
+}
+
+bool Parameters::set_by_name_uint32(const char *name, uint32_t v)
+{
+    const auto *f = find(name);
+    if (!f) {
+        return false;
+    }
+    f->set_uint32(v);
+    return true;
 }
 
 bool Parameters::set_by_name_uint8(const char *name, uint8_t v)
