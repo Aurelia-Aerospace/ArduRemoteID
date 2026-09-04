@@ -12,6 +12,9 @@
 #define PIN_UART_TX 18
 #define PIN_UART_RX 17
 
+#define PIN_I2C_SDA 45
+#define PIN_I2C_SCL 46
+
 #define WS2812_LED_PIN GPIO_NUM_48
 
 #elif defined(BOARD_ESP32C3_DEV)
@@ -159,6 +162,40 @@
 #define PIN_UART_RX 17
 
 #define WS2812_LED_PIN GPIO_NUM_48
+
+#elif defined(BOARD_AURELIA_RID_C3)
+#define BOARD_ID 24
+
+#define PIN_CAN_TX GPIO_NUM_1
+#define PIN_CAN_RX GPIO_NUM_0
+
+#define PIN_UART_TX 4
+#define PIN_UART_RX 5
+
+#define PIN_I2C_SDA 18
+#define PIN_I2C_SCL 19
+
+#define WS2812_LED_PIN GPIO_NUM_3
+#define CAN_APP_NODE_NAME "Aurelia Technologies"
+
+#elif defined(BOARD_AURELIA_RID_S3)
+#define BOARD_ID 25
+
+#define PIN_CAN_TX GPIO_NUM_42
+#define PIN_CAN_RX GPIO_NUM_47
+
+#define PIN_UART_TX 18
+#define PIN_UART_RX 17
+
+#define PIN_I2C_SDA 45
+#define PIN_I2C_SCL 46
+
+#define WS2812_LED_PIN GPIO_NUM_48
+#define AIRPORT_LED GPIO_NUM_11
+#define COUNTRY_LED GPIO_NUM_12
+#define PRISON_LED GPIO_NUM_13
+#define EXTRA_LED GPIO_NUM_14
+#define CAN_APP_NODE_NAME "Aurelia Technologies"
 
 #else
 #error "unsupported board"
