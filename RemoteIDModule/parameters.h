@@ -37,6 +37,18 @@ public:
     uint8_t wifi_channel = 6;
     uint8_t to_factory_defaults = 0;
     uint8_t options;
+    uint32_t flt_time;
+    uint32_t flt_time_aux;
+#if defined(BOARD_AURELIA_RID_S3)
+    float min_prison_dis;
+    float min_lg_airport_dis;
+    float min_md_airport_dis;
+    float min_sm_airport_dis;
+    float min_sp_airport_dis;
+    float min_hb_airport_dis;
+    float min_test_airport_dis;
+    float min_hp_airport_dis;
+#endif
     struct {
         char b64_key[64];
     } public_keys[MAX_PUBLIC_KEYS];
@@ -88,8 +100,12 @@ public:
 
     bool set_by_name_uint8(const char *name, uint8_t v);
     bool set_by_name_int8(const char *name, int8_t v);
+    bool set_by_name_uint32(const char *name, uint32_t v);
     bool set_by_name_char64(const char *name, const char *s);
     bool set_by_name_string(const char *name, const char *s);
+#if defined(BOARD_AURELIA_RID_S3)
+    void reset_min_test_distance();
+#endif
 
     /*
       return a public key
@@ -99,8 +115,12 @@ public:
     bool remove_public_key(uint8_t i);
     bool no_public_keys(void) const;
 
+    bool get_private_key(uint8_t seed[32]) const;
+    bool set_private_key(const uint8_t seed[32]);
+
     static uint16_t param_count_float(void);
     static int16_t param_index_float(const Param *p);
+    int32_t get_serial_number();
 
 private:
     void load_defaults(void);
@@ -110,5 +130,10 @@ private:
 #define OPTIONS_FORCE_ARM_OK (1U<<0)
 #define OPTIONS_DONT_SAVE_BASIC_ID_TO_PARAMETERS (1U<<1)
 #define OPTIONS_PRINT_RID_MAVLINK (1U<<2)
+#if defined(BOARD_AURELIA_RID_S3)
+#define OPTIONS_BYPASS_AIRPORT_CHECKS (1U<<3)
+#define OPTIONS_BYPASS_COUNTRY_CHECKS (1U<<4)
+#define OPTIONS_BYPASS_PRISON_CHECKS (1U<<5)
+#endif
 
 extern Parameters g;

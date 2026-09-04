@@ -1,3 +1,4 @@
+#pragma once
 
 #include "CANDriver.h"
 #include "transport.h"
@@ -11,9 +12,9 @@
 #include <dronecan.remoteid.System.h>
 #include <dronecan.remoteid.OperatorID.h>
 #include <dronecan.remoteid.SecureCommand.h>
+#include <esp_ota_ops.h>
 
 #define CAN_POOL_SIZE 4096
-
 
 class DroneCAN : public Transport {
 public:
@@ -23,6 +24,7 @@ public:
 
 private:
     uint32_t last_node_status_ms;
+    uint32_t last_arm_status_ms;
     CANDriver can_driver;
     CanardInstance canard;
     uint32_t canard_memory_pool[CAN_POOL_SIZE/sizeof(uint32_t)];
@@ -59,8 +61,17 @@ private:
     void handle_Location(CanardRxTransfer* transfer);
     void handle_param_getset(CanardInstance* ins, CanardRxTransfer* transfer);
     void handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* transfer);
+    void handle_FltTime(CanardRxTransfer* transfer);
+    void handle_SerialNumber(CanardRxTransfer* transfer);
 
     void can_printf(const char *fmt, ...);
+
+    // OTA state
+    esp_ota_handle_t _ota_handle;
+    const esp_partition_t *_ota_part;
+    bool _ota_active;
+    bool _ota_reboot_pending;
+    bool _ota_show_fail;
 
 public:
     void onTransferReceived(CanardInstance* ins, CanardRxTransfer* transfer);
