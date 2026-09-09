@@ -14,8 +14,6 @@ uint32_t Transport::last_basic_id_ms;
 uint32_t Transport::last_self_id_ms;
 uint32_t Transport::last_operator_id_ms;
 uint32_t Transport::last_system_ms;
-uint32_t Transport::last_flt_time_ms;
-uint32_t Transport::last_serial_number_ms;
 uint32_t Transport::last_system_timestamp;
 float Transport::last_location_timestamp;
 
@@ -25,8 +23,6 @@ mavlink_open_drone_id_authentication_t Transport::authentication;
 mavlink_open_drone_id_self_id_t Transport::self_id;
 mavlink_open_drone_id_system_t Transport::system;
 mavlink_open_drone_id_operator_id_t Transport::operator_id;
-mavlink_aurelia_flt_time_t Transport::flt_time;
-mavlink_aurelia_odid_serial_number_t Transport::serial_number;
 uint8_t Transport::fl_status = 0;
 
 Transport::Transport()
@@ -85,14 +81,6 @@ uint8_t Transport::status_check(const char *&reason)
     if ((system.operator_latitude == 0 && system.operator_longitude == 0)) {
         ret += "OP_LOC ";
     }
-    if ((serial_number.serial_number == 0 || now_ms - last_serial_number_ms > max_age_other_ms)) {
-        ret += "SN ";
-        status = MAV_AURELIA_CHECK_STATUS_FAIL_GENERIC;
-    }else if (serial_number.serial_number != g.get_serial_number()) {
-        ret += "BAD_RID ";
-        status = MAV_AURELIA_CHECK_STATUS_FAIL_GENERIC;
-    }
-
     if (ret.length() == 0 && reason == nullptr) {
         status = MAV_AURELIA_CHECK_STATUS_GOOD_TO_ARM;
     } else {

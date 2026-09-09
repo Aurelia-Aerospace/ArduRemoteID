@@ -50,8 +50,6 @@ const Parameters::Param Parameters::params[] = {
 #endif
     { "TO_DEFAULTS",       Parameters::ParamType::UINT8,  (const void*)&g.to_factory_defaults,    0, 0, 1 }, //if set to 1, reset to factory defaults and make 0.
     { "DONE_INIT",         Parameters::ParamType::UINT8,  (const void*)&g.done_init,        0, 0, 0, PARAM_FLAG_HIDDEN},
-    { "FLT_TIME",          Parameters::ParamType::UINT32,  (const void*)&g.flt_time,        0, 0, 946080000, PARAM_FLAG_HIDDEN},//30 years maximum
-    { "FLT_TIME_AUX",      Parameters::ParamType::UINT32,  (const void*)&g.flt_time_aux,        0, 0, 946080000, PARAM_FLAG_HIDDEN},//30 years maximum
     { "",                  Parameters::ParamType::NONE,   nullptr,  },
 };
 
@@ -391,13 +389,6 @@ void Parameters::init(void)
     }
 }
 
-int32_t Parameters::get_serial_number(){
-    char serial_n[6];
-    strncpy(serial_n, g.uas_id + 9, 5);//Imprimir uas_id
-    serial_n[5] = '\0';
-    int32_t sn  = atoi(serial_n);
-    return sn;
-}
 
 /*
   check if BasicID info is filled in with parameters
