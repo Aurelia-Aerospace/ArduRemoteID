@@ -865,8 +865,9 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
         }
         esp_wifi_stop();
         Serial.printf("OTA: erasing partition (%u bytes)...\n", (unsigned)fw_size);
-        if (esp_ota_begin(_ota_part, fw_size, &_ota_handle) != ESP_OK) {
-            Serial.printf("OTA: esp_ota_begin failed\n");
+        esp_err_t err_begin = esp_ota_begin(_ota_part, fw_size, &_ota_handle);
+        if (err_begin != ESP_OK) {
+            Serial.printf("OTA: esp_ota_begin failed: %s\n", esp_err_to_name(err_begin));
             _ota_show_fail = true;
             esp_wifi_start();
             reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
@@ -886,6 +887,8 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
         }
         uint8_t flags = req.data.data[0];
         bool last  = (flags & OTA_CHUNK_FLAG_LAST)  != 0;
+        uint32_t pkt_offset = 0;
+        memcpy(&pkt_offset, &req.data.data[1], sizeof(pkt_offset));
         const uint8_t *chunk = &req.data.data[5];
         uint16_t chunk_len   = req.data.len - 5;
 
@@ -900,8 +903,10 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
             reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_ACCEPTED;
             dronecan_send_secure_reply(ins, transfer, reply);
             processTx();
-            if (chunk_len > 0 && esp_ota_write(_ota_handle, chunk, chunk_len) != ESP_OK) {
-                Serial.printf("OTA: esp_ota_write failed\n");
+            esp_err_t err_w = chunk_len > 0 ? esp_ota_write(_ota_handle, chunk, chunk_len) : ESP_OK;
+            if (err_w != ESP_OK) {
+                Serial.printf("OTA: esp_ota_write failed at offset %lu: %s\n",
+                              (unsigned long)pkt_offset, esp_err_to_name(err_w));
                 esp_ota_abort(_ota_handle);
                 _ota_active = false;
                 _ota_show_fail = true;
@@ -911,8 +916,10 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
         }
 
         // Last chunk: write then validate before responding.
-        if (chunk_len > 0 && esp_ota_write(_ota_handle, chunk, chunk_len) != ESP_OK) {
-            Serial.printf("OTA: esp_ota_write failed (last chunk)\n");
+        esp_err_t err_last = chunk_len > 0 ? esp_ota_write(_ota_handle, chunk, chunk_len) : ESP_OK;
+        if (err_last != ESP_OK) {
+            Serial.printf("OTA: esp_ota_write failed (last chunk) at offset %lu: %s\n",
+                          (unsigned long)pkt_offset, esp_err_to_name(err_last));
             esp_ota_abort(_ota_handle);
             _ota_active = false;
             _ota_show_fail = true;
@@ -920,8 +927,9 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
             reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
             goto send_reply;
         }
-        if (esp_ota_end(_ota_handle) != ESP_OK) {
-            Serial.printf("OTA: esp_ota_end failed\n");
+        esp_err_t err_end = esp_ota_end(_ota_handle);
+        if (err_end != ESP_OK) {
+            Serial.printf("OTA: esp_ota_end failed: %s\n", esp_err_to_name(err_end));
             _ota_active = false;
             _ota_show_fail = true;
             esp_wifi_start();
