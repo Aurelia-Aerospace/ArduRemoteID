@@ -147,7 +147,7 @@ void FlightChecks::reset_wdt(uint32_t *last_reset)
     uint32_t now = millis();
     if (now - *last_reset > 500)
     {
-        t.set_fl_status(MAV_AURELIA_CHECK_STATUS_FAIL_FLYING_NOT_ALLOWED);
+        t.set_fl_status(MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC);
         const char *init_msg = "Initializing";
         t.set_parse_fail(init_msg);
         t.update();

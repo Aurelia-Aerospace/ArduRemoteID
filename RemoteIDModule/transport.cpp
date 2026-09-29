@@ -34,12 +34,12 @@ Transport::Transport()
  */
 uint8_t Transport::status_check(const char *&reason)
 {
-    uint8_t status = MAV_AURELIA_CHECK_STATUS_FAIL_FLYING_NOT_ALLOWED;
+    uint8_t status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
 
      //return status OK if we have enabled the force arm option
     if ((g.options & OPTIONS_FORCE_ARM_OK)) {
         if(reason == nullptr){
-            status = MAV_AURELIA_CHECK_STATUS_GOOD_TO_ARM;
+            status = MAV_ODID_ARM_STATUS_GOOD_TO_ARM;
         }
         fl_status = status;
         return status;
@@ -58,31 +58,31 @@ uint8_t Transport::status_check(const char *&reason)
         // if there is no basic ID data stored in the parameters give warning. If basic ID data are streamed to RID device,
         // it will store them in the parameters
         ret += "ID ";
-        status = MAV_AURELIA_CHECK_STATUS_FAIL_GENERIC;
+        status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
 
     if ((last_self_id_ms == 0  || now_ms - last_self_id_ms > max_age_other_ms)) {
         ret += "SELF_ID ";
-        status = MAV_AURELIA_CHECK_STATUS_FAIL_GENERIC;
+        status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
 
     if ((last_operator_id_ms == 0 || now_ms - last_operator_id_ms > max_age_other_ms)) {
         ret += "OP_ID ";
-        status = MAV_AURELIA_CHECK_STATUS_FAIL_GENERIC;
+        status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
 
     if ((last_system_ms == 0 || now_ms - last_system_ms > max_age_location_ms)) {
         // we use location age limit for system as the operator location needs to come in as fast
         // as the vehicle location for FAA standard
         ret += "SYS ";
-        status = MAV_AURELIA_CHECK_STATUS_FAIL_GENERIC;
+        status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
 
     if ((system.operator_latitude == 0 && system.operator_longitude == 0)) {
         ret += "OP_LOC ";
     }
     if (ret.length() == 0 && reason == nullptr) {
-        status = MAV_AURELIA_CHECK_STATUS_GOOD_TO_ARM;
+        status = MAV_ODID_ARM_STATUS_GOOD_TO_ARM;
     } else {
         static char return_string[200];
         memset(return_string, 0, sizeof(return_string));
