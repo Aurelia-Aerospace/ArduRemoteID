@@ -9,22 +9,30 @@
 
 class Led {
 public:
-    enum class LedState {
+    typedef enum LedState {
         INIT=0,
         PFST_FAIL,
         ARM_FAIL,
-        ARM_OK
+        ARM_OK,
+        STARTING,
+        UPDATE_SUCCESS,
+        UPDATE_FAIL,
+        OTA_IN_PROGRESS,
+        OFF,
+        COUNT
     };
 
     void set_state(LedState _state) {
         state = _state;
     }
     void update(void);
+    void test(void);
 
 private:
     void init(void);
     bool done_init;
     uint32_t last_led_trig_ms;
+    uint32_t last_extra_led_trig_ms;
     LedState state;
 
 #ifdef WS2812_LED_PIN
