@@ -3,4 +3,15 @@ git-version.h
 *.bin
 *.elf
 *.log
+*.map
 romfs_files.h
+arduino-cli_0.27.1_Linux_64bit.tar.gz
+./arduino-cli_0.27.1_Linux_64bit.tar.gz
+RemoteIDModule/cipher_config.h
+RemoteIDModule/keys
+RemoteIDModule/keys/*
+.vscode/
+bin/
+RemoteIDModule/logs/
+RemoteIDModule/dl_temp/
+RemoteIDModule/build-*/
