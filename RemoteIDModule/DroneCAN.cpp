@@ -27,9 +27,7 @@
 #include <dronecan.remoteid.SelfID.h>
 #include <dronecan.remoteid.System.h>
 #include <dronecan.remoteid.OperatorID.h>
-#include <dronecan.aurelia.remoteid.Status.h>
-#include <dronecan.aurelia.util.FltTime.h>
-#include <dronecan.aurelia.remoteid.SerialNumber.h>
+#include <dronecan.remoteid.ArmStatus.h>
 
 #ifndef CAN_BOARD_ID
 #define CAN_BOARD_ID 10001
@@ -144,8 +142,8 @@ void DroneCAN::node_status_send(void)
 
 void DroneCAN::arm_status_send(void)
 {
-    uint8_t buffer[DRONECAN_AURELIA_REMOTEID_STATUS_MAX_SIZE];
-    dronecan_aurelia_remoteid_Status arm_status {};
+    uint8_t buffer[DRONECAN_REMOTEID_ARMSTATUS_MAX_SIZE];
+    dronecan_remoteid_ArmStatus arm_status {};
 
     const uint8_t status = fl_status;
     const char *reason = parse_fail==nullptr?"":parse_fail;
@@ -154,12 +152,12 @@ void DroneCAN::arm_status_send(void)
     arm_status.error.len = strlen(reason);
     strncpy((char*)arm_status.error.data, reason, sizeof(arm_status.error.data));
 
-    const uint16_t len = dronecan_aurelia_remoteid_Status_encode(&arm_status, buffer);
+    const uint16_t len = dronecan_remoteid_ArmStatus_encode(&arm_status, buffer);
 
     static uint8_t tx_id;
     canardBroadcast(&canard,
-                    DRONECAN_AURELIA_REMOTEID_STATUS_SIGNATURE,
-                    DRONECAN_AURELIA_REMOTEID_STATUS_ID,
+                    DRONECAN_REMOTEID_ARMSTATUS_SIGNATURE,
+                    DRONECAN_REMOTEID_ARMSTATUS_ID,
                     &tx_id,
                     CANARD_TRANSFER_PRIORITY_LOW,
                     (void*)buffer,
@@ -212,14 +210,6 @@ void DroneCAN::onTransferReceived(CanardInstance* ins,
     case DRONECAN_REMOTEID_SECURECOMMAND_ID:
         handle_SecureCommand(ins, transfer);
         break;
-    case DRONECAN_AURELIA_UTIL_FLTTIME_ID:
-        //Serial.printf("DroneCAN: got FltTime\n");
-        handle_FltTime(transfer);
-        break;
-     case DRONECAN_AURELIA_REMOTEID_SERIALNUMBER_ID:
-        //Serial.printf("DroneCAN: got SerialNumber\n");
-        handle_SerialNumber(transfer);
-        break;
     default:
         //Serial.printf("reject %u\n", transfer->data_type_id);
         break;
@@ -249,8 +239,6 @@ bool DroneCAN::shouldAcceptTransfer(const CanardInstance* ins,
         ACCEPT_ID(DRONECAN_REMOTEID_SYSTEM);
         ACCEPT_ID(DRONECAN_REMOTEID_SECURECOMMAND);
         ACCEPT_ID(UAVCAN_PROTOCOL_PARAM_GETSET);
-        ACCEPT_ID(DRONECAN_AURELIA_UTIL_FLTTIME);
-        ACCEPT_ID(DRONECAN_AURELIA_REMOTEID_SERIALNUMBER);
         return true;
     }
     //Serial.printf("%u: reject ID 0x%x\n", millis(), data_type_id);
@@ -584,26 +572,6 @@ void DroneCAN::handle_System(CanardRxTransfer* transfer)
     COPY_FIELD(class_eu);
     COPY_FIELD(operator_altitude_geo);
     COPY_FIELD(timestamp);
-}
-
-void DroneCAN::handle_FltTime(CanardRxTransfer* transfer)
-{
-    dronecan_aurelia_util_FltTime pkt {};
-    auto &mpkt = flt_time;
-    dronecan_aurelia_util_FltTime_decode(transfer, &pkt);
-    last_flt_time_ms = millis();
-    memset(&mpkt, 0, sizeof(mpkt));
-    COPY_FIELD(flt_time);
-}
-
-void DroneCAN::handle_SerialNumber(CanardRxTransfer* transfer)
-{
-    dronecan_aurelia_remoteid_SerialNumber pkt {};
-    auto &mpkt = serial_number;
-    dronecan_aurelia_remoteid_SerialNumber_decode(transfer, &pkt);
-    last_serial_number_ms = millis();
-    memset(&mpkt, 0, sizeof(mpkt));
-    COPY_FIELD(serial_number);
 }
 
 void DroneCAN::handle_OperatorID(CanardRxTransfer* transfer)

@@ -48,16 +48,6 @@ public:
         return operator_id;
     }
 
-    const mavlink_aurelia_flt_time_t &get_flt_time(void) const
-    {
-        return flt_time;
-    }
-
-    const mavlink_aurelia_odid_serial_number_t &get_serial_number(void) const
-    {
-        return serial_number;
-    }
-
     uint32_t get_last_location_ms(void) const
     {
         return last_location_ms;
@@ -98,8 +88,6 @@ protected:
     static uint32_t last_operator_id_ms;
     static uint32_t last_system_ms;
     static uint32_t last_system_timestamp;
-    static uint32_t last_flt_time_ms;
-    static uint32_t last_serial_number_ms;
     static float last_location_timestamp;
 
     static mavlink_open_drone_id_location_t location;
@@ -108,8 +96,6 @@ protected:
     static mavlink_open_drone_id_self_id_t self_id;
     static mavlink_open_drone_id_system_t system;
     static mavlink_open_drone_id_operator_id_t operator_id;
-    static mavlink_aurelia_flt_time_t flt_time;
-    static mavlink_aurelia_odid_serial_number_t serial_number;
 
     void make_session_key(uint8_t key[8]) const;
 

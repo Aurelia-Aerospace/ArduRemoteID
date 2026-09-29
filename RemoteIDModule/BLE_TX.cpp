@@ -278,22 +278,6 @@ bool BLE_TX::transmit_legacy(ODID_UAS_Data &UAS_data)
         }
         break;
 
-    /*case  6: //set flight time
-       // struct custom_data {  
-        //    uint32_t flt_time;
-        //};
-        //custom_data data;
-        //data.flt_time = g.flt_time;
-        uint32_t flt_time=g.flt_time;
-
-        memset(legacy_payload, 0, sizeof(legacy_payload));
-        const uint8_t legacy_flt_time_header[] { 0x02, 0x01, 0x06, 0x05, 0x04};
-        memcpy(legacy_payload, legacy_flt_time_header, sizeof(legacy_flt_time_header));
-        memcpy(&legacy_payload[sizeof(legacy_flt_time_header)], &flt_time, sizeof(flt_time) + 1);
-
-        legacy_length = sizeof(legacy_flt_time_header) + sizeof(flt_time) + 1;
-        break;*/
-
     case  7: {
         //set BLE name
         char legacy_name[28] {};

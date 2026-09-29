@@ -37,8 +37,6 @@ public:
     uint8_t wifi_channel = 6;
     uint8_t to_factory_defaults = 0;
     uint8_t options;
-    uint32_t flt_time;
-    uint32_t flt_time_aux;
 #if defined(BOARD_AURELIA_RID_S3)
     float min_prison_dis;
     float min_lg_airport_dis;
@@ -120,7 +118,6 @@ public:
 
     static uint16_t param_count_float(void);
     static int16_t param_index_float(const Param *p);
-    int32_t get_serial_number();
 
 private:
     void load_defaults(void);
