@@ -17,4 +17,5 @@ private:
     // first 16 bytes for flashing, skip buffer in updater
     uint8_t lead_bytes[16];
     uint8_t lead_len;
+    uint32_t offset;
 };
