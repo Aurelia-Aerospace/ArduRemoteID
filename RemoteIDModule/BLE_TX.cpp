@@ -16,7 +16,6 @@
 #include "parameters.h"
 
 
-
 //interval min/max are configured for 1 Hz update rate. Somehow dynamic setting of these fields fails
 //shorter intervals lead to more BLE transmissions. This would result in increased power consumption and can lead to more interference to other radio systems.
 static esp_ble_gap_ext_adv_params_t legacy_adv_params = {
@@ -58,7 +57,6 @@ uint8_t BLE_TX::dBm_to_tx_power(float dBm) const
         uint8_t level;
         float dBm;
     } dBm_table[] = {
-        { ESP_PWR_LVL_N27,-27 },
         { ESP_PWR_LVL_N24,-24 },
         { ESP_PWR_LVL_N21,-21 },
         { ESP_PWR_LVL_N18,-18 },
@@ -280,7 +278,23 @@ bool BLE_TX::transmit_legacy(ODID_UAS_Data &UAS_data)
         }
         break;
 
-    case  6: {
+    /*case  6: //set flight time
+       // struct custom_data {  
+        //    uint32_t flt_time;
+        //};
+        //custom_data data;
+        //data.flt_time = g.flt_time;
+        uint32_t flt_time=g.flt_time;
+
+        memset(legacy_payload, 0, sizeof(legacy_payload));
+        const uint8_t legacy_flt_time_header[] { 0x02, 0x01, 0x06, 0x05, 0x04};
+        memcpy(legacy_payload, legacy_flt_time_header, sizeof(legacy_flt_time_header));
+        memcpy(&legacy_payload[sizeof(legacy_flt_time_header)], &flt_time, sizeof(flt_time) + 1);
+
+        legacy_length = sizeof(legacy_flt_time_header) + sizeof(flt_time) + 1;
+        break;*/
+
+    case  7: {
         //set BLE name
         char legacy_name[28] {};
         const char *UAS_ID = (const char *)UAS_data.BasicID[0].UASID;

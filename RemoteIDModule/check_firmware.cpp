@@ -65,7 +65,6 @@ bool CheckFirmware::check_OTA_partition(const esp_partition_t *part, const uint8
             spi_flash_munmap(handle);
             return true;
         }
-        Serial.printf("check failed key %u\n", i);
     }
     spi_flash_munmap(handle);
     Serial.printf("firmware failed checks\n");
