@@ -64,6 +64,10 @@ private:
 
     void can_printf(const char *fmt, ...);
 
+    // OTA_CHUNK flag bits (mirrors DSDL OTA_CHUNK_FLAG_* constants)
+    static constexpr uint8_t OTA_CHUNK_FLAG_FIRST = 0x01;
+    static constexpr uint8_t OTA_CHUNK_FLAG_LAST  = 0x02;
+
     // OTA state
     esp_ota_handle_t _ota_handle;
     const esp_partition_t *_ota_part;

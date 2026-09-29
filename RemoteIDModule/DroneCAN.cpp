@@ -842,34 +842,52 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
         goto send_reply;
     }
 
+    if (req.operation == DRONECAN_REMOTEID_SECURECOMMAND_REQUEST_SECURE_COMMAND_OTA_BEGIN) {
+        // Synchronous pre-erase: block until esp_ota_begin completes, then reply.
+        // The FC holds the MAVLink OTA_BEGIN reply until it gets this ACCEPTED.
+        if (req.data.len < 4) {
+            reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_DENIED;
+            goto send_reply;
+        }
+        if (_ota_active) {
+            esp_ota_abort(_ota_handle);
+            _ota_active = false;
+            esp_wifi_start();
+        }
+        uint32_t fw_size = 0;
+        memcpy(&fw_size, req.data.data, sizeof(fw_size));
+        _ota_part = esp_ota_get_next_update_partition(nullptr);
+        if (_ota_part == nullptr) {
+            Serial.printf("OTA: no OTA partition\n");
+            _ota_show_fail = true;
+            reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
+            goto send_reply;
+        }
+        esp_wifi_stop();
+        Serial.printf("OTA: erasing partition (%u bytes)...\n", (unsigned)fw_size);
+        if (esp_ota_begin(_ota_part, fw_size, &_ota_handle) != ESP_OK) {
+            Serial.printf("OTA: esp_ota_begin failed\n");
+            _ota_show_fail = true;
+            esp_wifi_start();
+            reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
+            goto send_reply;
+        }
+        _ota_active = true;
+        _ota_show_fail = false;
+        Serial.printf("OTA: partition ready\n");
+        reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_ACCEPTED;
+        goto send_reply;
+    }
+
     if (req.operation == DRONECAN_REMOTEID_SECURECOMMAND_REQUEST_SECURE_COMMAND_OTA_CHUNK) {
         if (req.data.len < 5) {
             reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_DENIED;
             goto send_reply;
         }
         uint8_t flags = req.data.data[0];
+        bool last  = (flags & OTA_CHUNK_FLAG_LAST)  != 0;
         const uint8_t *chunk = &req.data.data[5];
-        uint16_t chunk_len = req.data.len - 5;
-        bool first = (flags & 0x01) != 0;
-        bool last  = (flags & 0x02) != 0;
-
-        if (first) {
-            if (_ota_active) {
-                Serial.printf("OTA: aborting previous session\n");
-                esp_ota_abort(_ota_handle);
-                _ota_active = false;
-                esp_wifi_start();
-            }
-            _ota_part = esp_ota_get_next_update_partition(nullptr);
-            if (_ota_part == nullptr) {
-                Serial.printf("OTA: no OTA partition found\n");
-                _ota_show_fail = true;
-                reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
-                goto send_reply;
-            }
-            _ota_active = true;
-            Serial.printf("OTA: session started\n");
-        }
+        uint16_t chunk_len   = req.data.len - 5;
 
         if (!_ota_active) {
             Serial.printf("OTA: chunk received but no active session\n");
@@ -878,22 +896,10 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
         }
 
         if (!last) {
-            // Fire-and-forget: respond ACCEPTED before any blocking operations so the FC
-            // can pipeline the next chunk immediately. esp_ota_begin (flash erase, ~3s)
-            // and esp_wifi_stop are deferred to after the reply.
+            // Fire-and-forget: erase already done by OTA_BEGIN, writes are fast.
             reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_ACCEPTED;
             dronecan_send_secure_reply(ins, transfer, reply);
             processTx();
-            if (first) {
-                esp_wifi_stop();
-                if (esp_ota_begin(_ota_part, OTA_SIZE_UNKNOWN, &_ota_handle) != ESP_OK) {
-                    Serial.printf("OTA: esp_ota_begin failed\n");
-                    _ota_active = false;
-                    _ota_show_fail = true;
-                    esp_wifi_start();
-                    return;
-                }
-            }
             if (chunk_len > 0 && esp_ota_write(_ota_handle, chunk, chunk_len) != ESP_OK) {
                 Serial.printf("OTA: esp_ota_write failed\n");
                 esp_ota_abort(_ota_handle);
