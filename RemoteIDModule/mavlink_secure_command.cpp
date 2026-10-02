@@ -6,6 +6,9 @@
 #include "board_config.h"
 #include "version.h"
 #include "parameters.h"
+#if defined(BOARD_AURELIA_RID_S3)
+#include "flight_checker.h"
+#endif
 
 /*
   handle a SECURE_COMMAND
@@ -124,12 +127,27 @@ void MAVLinkSerial::handle_secure_command(const mavlink_secure_command_t &pkt)
             char *eq = strchr(command, '=');
             if (eq != nullptr) {
                 *eq = 0;
+#if defined(BOARD_AURELIA_RID_S3)
+                if (strcmp(command, "ZONE_OK") == 0) {
+                    if (!flight_checks.zone_ok(strtoul(eq+1, nullptr, 0))) {
+                        reply.result = MAV_RESULT_FAILED;
+                    }
+                } else if (strcmp(command, "ZONE_LOCK") == 0) {
+                    flight_checks.zone_lock(strtoul(eq+1, nullptr, 0));
+                } else
+#endif
                 if (!g.set_by_name_string(command, eq+1)) {
                     mav_printf(MAV_SEVERITY_INFO, "set %s failed", command);
                     reply.result = MAV_RESULT_FAILED;
                 } else {
                     mav_printf(MAV_SEVERITY_INFO, "set %s OK", command);
                 }
+            } else {
+#if defined(BOARD_AURELIA_RID_S3)
+                if (strcmp(command, "ZONE_CLEAR") == 0) {
+                    flight_checks.zone_clear();
+                }
+#endif
             }
             command += cmdlen+1;
             data_len -= cmdlen+1;

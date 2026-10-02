@@ -6,6 +6,10 @@
 #include "board_config.h"
 #include "version.h"
 #include "parameters.h"
+#if defined(BOARD_AURELIA_RID_S3)
+#include "flight_checker.h"
+#include "esp_heap_caps.h"
+#endif
 
 #define SERIAL_BAUD 115200
 
@@ -296,8 +300,15 @@ void MAVLinkSerial::arm_status_send(void)
 {
     const uint8_t status = parse_fail==nullptr?MAV_ODID_ARM_STATUS_GOOD_TO_ARM:MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     const char *reason = parse_fail==nullptr?"":parse_fail;
-    mavlink_msg_open_drone_id_arm_status_send(
-        chan,
-        status,
-        reason);
+    mavlink_msg_open_drone_id_arm_status_send(chan, status, reason);
+#if defined(BOARD_AURELIA_RID_S3)
+    if (g.options & OPTIONS_BENCH_MODE) {
+        mavlink_msg_named_value_float_send(chan, millis(), "free_heap",
+                                          (float)esp_get_free_heap_size());
+        mavlink_msg_named_value_float_send(chan, millis(), "min_heap",
+                                          (float)esp_get_minimum_free_heap_size());
+        mavlink_msg_named_value_float_send(chan, millis(), "scan_us",
+                                          (float)FlightChecks::last_scan_us);
+    }
+#endif
 }
