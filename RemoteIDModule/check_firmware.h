@@ -20,6 +20,10 @@ public:
     static bool check_OTA_next(const esp_partition_t *part, const uint8_t *lead_bytes, uint32_t lead_length);
     static bool check_OTA_running(void);
 
+    // verify a signed SPIFFS/zones image written to a data partition
+    // image_size = total bytes written (SPIFFS data + 4096-byte signature block)
+    static bool check_spiffs_partition(const esp_partition_t *part, uint32_t image_size);
+
 private:
     static bool check_OTA_partition(const esp_partition_t *part, const uint8_t *lead_bytes, uint32_t lead_length, uint32_t &board_id);
     static bool check_partition(const uint8_t *flash, uint32_t flash_len,

@@ -3,6 +3,7 @@
 #include "monocypher.h"
 #include "parameters.h"
 #include <string.h>
+#include <esp_partition.h>
 #include "util.h"
 
 bool CheckFirmware::check_partition(const uint8_t *flash, uint32_t flash_len,
@@ -104,4 +105,75 @@ bool CheckFirmware::check_OTA_running(void)
         
 esp_err_t esp_partition_read_raw(const esp_partition_t* partition,
                                  size_t src_offset, void* dst, size_t size);
-    
+
+bool CheckFirmware::check_spiffs_partition(const esp_partition_t *part, uint32_t image_size)
+{
+    if (image_size < 4096 || image_size > part->size) {
+        Serial.printf("SPIFFS: bad image_size %u\n", (unsigned)image_size);
+        return false;
+    }
+
+    // Signature block is the last 4096 bytes of the written image.
+    // Layout: SPIFFS data (data_len bytes) | descriptor[8] | board_id(u32) | data_len(u32) | sig[64] | zeros
+    uint8_t buf[4096];
+    if (esp_partition_read(part, image_size - 4096, buf, sizeof(buf)) != ESP_OK) {
+        Serial.printf("SPIFFS: read tail failed\n");
+        return false;
+    }
+
+    const uint8_t sig_rev[] = APP_DESCRIPTOR_REV;
+    uint8_t sig[8];
+    for (uint8_t i = 0; i < 8; i++) sig[i] = sig_rev[7-i];
+
+    const app_descriptor_t *ad = (const app_descriptor_t*)memmem(buf, sizeof(buf), sig, 8);
+    if (!ad) {
+        Serial.printf("SPIFFS: descriptor not found\n");
+        return false;
+    }
+
+    const uint32_t data_len = ad->image_size;
+    if (data_len == 0 || data_len + 4096 > image_size) {
+        Serial.printf("SPIFFS: bad data_len %u\n", (unsigned)data_len);
+        return false;
+    }
+
+    if (ad->board_id != 0 && ad->board_id != BOARD_ID) {
+        Serial.printf("SPIFFS: wrong board_id %u (own %u)\n", (unsigned)ad->board_id, BOARD_ID);
+        return false;
+    }
+
+    if (g.no_public_keys()) {
+        Serial.printf("SPIFFS: no public keys — accepting\n");
+        return true;
+    }
+
+    // Save signature before buf is reused for data streaming
+    uint8_t saved_sig[64];
+    memcpy(saved_sig, ad->sign_signature, 64);
+
+    for (uint8_t k = 0; k < MAX_PUBLIC_KEYS; k++) {
+        uint8_t key[32];
+        if (!g.get_public_key(k, key)) continue;
+
+        crypto_check_ctx ctx {};
+        auto *actx = (crypto_check_ctx_abstract*)&ctx;
+        crypto_check_init(actx, saved_sig, key);
+
+        uint32_t remaining = data_len, off = 0;
+        bool read_ok = true;
+        while (remaining > 0) {
+            uint32_t n = remaining < sizeof(buf) ? remaining : (uint32_t)sizeof(buf);
+            if (esp_partition_read(part, off, buf, n) != ESP_OK) { read_ok = false; break; }
+            crypto_check_update(actx, buf, n);
+            off += n;
+            remaining -= n;
+        }
+        if (read_ok && crypto_check_final(actx) == 0) {
+            Serial.printf("SPIFFS check good for key %u\n", k);
+            return true;
+        }
+    }
+    Serial.printf("SPIFFS: signature check failed\n");
+    return false;
+}
+
