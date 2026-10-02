@@ -3,705 +3,426 @@
 #if defined(BOARD_AURELIA_RID_S3)
 #include <Arduino.h>
 #include <stdlib.h>
+#include <string.h>
 #include "parameters.h"
 
-Coordinate FlightChecks::origin;
+// Static member definitions
+Coordinate              FlightChecks::origin;
+bool                    FlightChecks::files_read;
+float                   FlightChecks::origin_alt_m;
+FlightChecks::ZoneTile* FlightChecks::tile_index;
+uint16_t                FlightChecks::n_tiles;
+uint8_t                 FlightChecks::tile_deg = 4;
+uint32_t                FlightChecks::zones_data_off;
+uint32_t                FlightChecks::country_offset;
+uint8_t*                FlightChecks::country_data;
+uint32_t                FlightChecks::country_data_size;
+int8_t                  FlightChecks::cached_lat_tile;
+int8_t                  FlightChecks::cached_lon_tile;
+uint8_t*                FlightChecks::tile_cache;
+uint32_t                FlightChecks::tile_cache_bytes;
+uint32_t                FlightChecks::unlocked_zones[32];
+uint8_t                 FlightChecks::n_unlocked;
 
-uint16_t FlightChecks::country_coords_counter;
-uint16_t FlightChecks::country_coords_size;
-Coordinate *FlightChecks::country_coords = nullptr;
+uint32_t            FlightChecks::last_scan_us;
 
-uint16_t FlightChecks::airport_coords_counter;
-uint16_t FlightChecks::airport_coords_size;
-AirportCoordinate *FlightChecks::airport_coords = nullptr;
+static_assert(sizeof(FlightChecks::ZoneTile) == 8, "ZoneTile must be 8 bytes");
 
-uint16_t FlightChecks::prison_coords_counter;
-uint16_t FlightChecks::prison_coords_size;
-Coordinate *FlightChecks::prison_coords = nullptr;
+// Category (zone_id >> 27) → OPTIONS bypass bit  [5-bit category, zones.bin VERSION=3]
+static const uint32_t CAT_BYPASS_BIT[18] = {
+    OPTIONS_BYPASS_AIRPORT_L,   // 0
+    OPTIONS_BYPASS_AIRPORT_M,   // 1
+    OPTIONS_BYPASS_AIRPORT_S,   // 2
+    OPTIONS_BYPASS_SEAPLANE,    // 3
+    OPTIONS_BYPASS_HELIPORT,    // 4
+    OPTIONS_BYPASS_BALLOONPORT, // 5
+    OPTIONS_BYPASS_FAA_B,       // 6
+    OPTIONS_BYPASS_FAA_C,       // 7
+    OPTIONS_BYPASS_FAA_D,       // 8
+    OPTIONS_BYPASS_EU_CTR,      // 9
+    OPTIONS_BYPASS_EU_ATZ,      // 10
+    OPTIONS_BYPASS_EU_R,        // 11
+    OPTIONS_BYPASS_EU_TMA,      // 12
+    OPTIONS_BYPASS_EU_P,        // 13
+    OPTIONS_BYPASS_PRISON,      // 14
+    OPTIONS_BYPASS_STADIUM,     // 15
+    OPTIONS_BYPASS_MILITARY,    // 16
+    OPTIONS_BYPASS_COUNTRY,     // 17 (country is in flat section, not tiles)
+};
 
-bool FlightChecks::files_read;
+// Category → GCS message tag
+static const char *CAT_MSG[18] = {
+    "APT_L ",   "APT_M ",   "APT_S ",   "APT_SEA ", "APT_HEL ", "APT_BAL ",
+    "FAA_B ",   "FAA_C ",   "FAA_D ",
+    "EU_CTR ",  "EU_ATZ ",  "EU_R ",    "EU_TMA ",  "EU_P ",
+    "PRISON ",  "STADIUM ", "MZ ",      "COUNTRY ",
+};
+
+static void append_tag(String &ret, const char *tag, bool &truncated)
+{
+    if (ret.length() + strlen(tag) > 48) {
+        ret += "+";
+        truncated = true;
+    } else {
+        ret += tag;
+    }
+}
 
 void FlightChecks::init()
 {
-    country_coords_size = 16;
-    airport_coords_size = 16;
-    prison_coords_size = 16;
-    country_coords_counter = 0;
-    airport_coords_counter = 0;
-    prison_coords_counter = 0;
-    files_read = false;
-    origin = {0, 0};
-    if (country_coords != nullptr)
-    {
-        free(country_coords);
-    }
-    if (airport_coords != nullptr)
-    {
-        free(airport_coords);
-    }
-    if (prison_coords != nullptr)
-    {
-        free(prison_coords);
-    }
-    country_coords = (Coordinate *)malloc(country_coords_size * sizeof(Coordinate));
-    airport_coords = (AirportCoordinate *)malloc(airport_coords_size * sizeof(AirportCoordinate));
-    prison_coords = (Coordinate *)malloc(prison_coords_size * sizeof(Coordinate));
-
-    if (!SPIFFS.begin(false))
-    {
-        Serial.println("An Error has occurred while mounting SPIFFS");
+    free(tile_index);   tile_index        = nullptr;
+    free(country_data); country_data      = nullptr;
+    free(tile_cache);   tile_cache        = nullptr;
+    files_read        = false;
+    n_tiles           = 0;
+    n_unlocked        = 0;
+    cached_lat_tile   = -128;
+    cached_lon_tile   = -128;
+    origin            = {0, 0};
+    origin_alt_m      = 0.0f;
+    if (!SPIFFS.begin(false)) {
+        Serial.println("SPIFFS mount error");
         spiffs_mounted = false;
     }
 }
 
-bool FlightChecks::check_for_near_airports()
-{ // Reads a file with bunch of airports and only save the ones that the drone can reach in an object array
-    File full_airport_file = SPIFFS.open(FULL_AIRPORT_LIST, FILE_READ);
-    if (!full_airport_file)
-    {
-        Serial.println("Failed to open file");
-        delay(1000);
-        return false;
-    }
+void FlightChecks::load_zones_binary()
+{
+    File f = SPIFFS.open("/zones.bin", FILE_READ);
+    if (!f) return;
 
-    if (full_airport_file.size() == 0)
-    {
-        full_airport_file.close();
-        delay(1000);
-        return false;
-    }
+    // Header (16 bytes): magic(u32) version(u16) tile_deg(u8) _pad(u8)
+    //                    n_tiles(u16) _pad(u16) data_offset(u32)
+    uint8_t hdr[16];
+    if (f.read(hdr, 16) != 16) { f.close(); return; }
 
-    uint32_t last_wdt_reset = millis();
+    uint32_t magic; memcpy(&magic, hdr,    4);
+    uint16_t ver;   memcpy(&ver,   hdr+4,  2);
+    uint16_t nt;    memcpy(&nt,    hdr+8,  2);
+    uint32_t doff;  memcpy(&doff,  hdr+12, 4);
 
-    while (full_airport_file.available())
-    {
-        String line = full_airport_file.readStringUntil('\n');
-        AirportCoordinate coord = parse_airport_coordinate(line);
-        if (dc.haversine(origin.lat, origin.lon, coord.lat, coord.lon) < MAX_DRONE_DISTANCE && airport_coords_size < MAX_CLOSE_AIRPORTS_SIZE)
-        {
-            if (airport_coords_counter >= airport_coords_size)
-            {
-                if (!double_coords_array(COORDS_ARRAY_ID::AIRPORT))
-                    return false;
-            }
+    if (magic != 0x5A4F4E45U || ver != 3) { f.close(); return; }
 
-            airport_coords[airport_coords_counter] = coord;
-            // Debug
-            // Serial.printf("Saved: %.7f,%.7f\n", airport_coords[airport_coords_counter].lat, airport_coords[airport_coords_counter].lon);
-            airport_coords_counter++;
-            if (!check_airports)
-                check_airports = true;
-        }
-        reset_wdt(&last_wdt_reset);
-    }
-    full_airport_file.close();
-    return true;
-}
+    tile_deg       = (hdr[6] > 0) ? hdr[6] : 4;
+    n_tiles        = nt;
+    zones_data_off = doff;
 
-bool FlightChecks::check_for_near_prisons()
-{ // Reads a file with bunch of prisons and only save the ones that the drone can reach in an object array
-    File full_prison_file = SPIFFS.open(FULL_PRISON_LIST, FILE_READ);
-    if (!full_prison_file)
-    {
-        Serial.println("Failed to open file");
-        delay(1000);
-        return false;
-    }
-
-    if (full_prison_file.size() == 0)
-    {
-        full_prison_file.close();
-        delay(1000);
-        return false;
-    }
-
-    uint32_t last_wdt_reset = millis();
-
-    while (full_prison_file.available())
-    {
-        String line = full_prison_file.readStringUntil('\n');
-        Coordinate coord = parse_coordinate(line);
-        if (dc.haversine(origin.lat, origin.lon, coord.lat, coord.lon) < MAX_DRONE_DISTANCE && prison_coords_size < MAX_CLOSE_PRISON_SIZE)
-        {
-            if (prison_coords_counter >= prison_coords_size)
-            {
-                if (!double_coords_array(COORDS_ARRAY_ID::PRISON))
-                    return false;
-            }
-
-            prison_coords[prison_coords_counter] = coord;
-            // Debug
-            // Serial.printf("Saved prison: %.7f,%.7f\n", prison_coords[prison_coords_counter].lat, prison_coords[prison_coords_counter].lon);
-            prison_coords_counter++;
-            if (!check_prisons)
-                check_prisons = true;
-        }
-        reset_wdt(&last_wdt_reset);
-    }
-    full_prison_file.close();
-    return true;
-}
-
-void FlightChecks::reset_wdt(uint32_t *last_reset)
-{ // Avoid wdt being triggered by setting a delay
-    uint32_t now = millis();
-    if (now - *last_reset > 500)
-    {
-        t.set_fl_status(MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC);
-        const char *init_msg = "Initializing";
-        t.set_parse_fail(init_msg);
-        t.update();
-        delay(1);
-        *last_reset = now;
-    }
-}
-
-bool FlightChecks::is_flying_near_a_prison()
-{ // Checks if flying inside a prison area
-    for (uint16_t i = 0; i < prison_coords_counter; i++)
-    {
-        if (dc.haversine(origin.lat, origin.lon, prison_coords[i].lat, prison_coords[i].lon) < g.min_prison_dis)
-        {
-            return true;
+    // Load tile index (8 bytes per entry)
+    if (n_tiles > 0) {
+        tile_index = (ZoneTile*)malloc((uint32_t)n_tiles * 8U);
+        if (!tile_index) { f.close(); return; }
+        if (f.read((uint8_t*)tile_index, (uint32_t)n_tiles * 8U) != (uint32_t)n_tiles * 8U) {
+            free(tile_index); tile_index = nullptr; f.close(); return;
         }
     }
-    return false;
-}
 
-bool FlightChecks::is_flying_near_an_airport()
-{ // Checks if flying inside an airport area
-    for (uint16_t i = 0; i < airport_coords_counter; i++)
-    {
-
-        float min_distance = g.min_test_airport_dis;
-        if (min_distance == 0)
-        {
-            switch (airport_coords[i].type)
-            {
-            case AIRPORT_TYPE::LARGE_AIRPORT:
-                min_distance = g.min_lg_airport_dis;
-                break;
-            case AIRPORT_TYPE::MEDIUM_AIRPORT:
-                min_distance = g.min_md_airport_dis;
-                break;
-            case AIRPORT_TYPE::SMALL_AIRPORT:
-                min_distance = g.min_sm_airport_dis;
-                break;
-            case AIRPORT_TYPE::HELIPORT:
-                min_distance = g.min_hp_airport_dis;
-                break;
-            case AIRPORT_TYPE::SEAPLANE_BASE:
-                min_distance = g.min_sp_airport_dis;
-                break;
-            case AIRPORT_TYPE::HOTAIR_BALLOON_BASE:
-                min_distance = g.min_hb_airport_dis;
-                break;
-            case AIRPORT_TYPE::TEST_FIELD:
-                min_distance = g.min_test_airport_dis;
-                break;
-            }
-        }
-        if (dc.haversine(origin.lat, origin.lon, airport_coords[i].lat, airport_coords[i].lon) < min_distance)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-uint8_t FlightChecks::is_inside_polygon_file(File countries_file)
-{ // The same as is_inside_polygon, but reading a spiffs file instead of an object array
-    bool inside = false;
-    Coordinate firstCoord;
-    Coordinate prevCoord;
-    bool isFirstCoord = true;
-    uint8_t polygon_count = 0;
-
-    uint32_t last_wdt_reset = millis();
-
-    while (countries_file.available())
-    {
-        String line = countries_file.readStringUntil('\n');
-        if (line.startsWith("#"))
-        {
-            if (!isFirstCoord)
-            {
-                inside ^= checkEdge(origin.lat, origin.lon, prevCoord.lat, prevCoord.lon, firstCoord.lat, firstCoord.lon);
-                if (inside)
-                {
-                    return polygon_count;
+    // Find country section start by scanning to the end of the last tile
+    if (n_tiles == 0) {
+        country_offset = zones_data_off;
+    } else {
+        uint32_t last_off = zones_data_off + tile_index[n_tiles - 1].offset;
+        f.seek(last_off);
+        uint8_t nr_buf[2];
+        if (f.read(nr_buf, 2) != 2) { free(tile_index); tile_index = nullptr; f.close(); return; }
+        uint16_t nr; memcpy(&nr, nr_buf, 2);
+        for (uint16_t i = 0; i < nr; i++) {
+            uint8_t rec5[5];
+            if (f.read(rec5, 5) != 5) { free(tile_index); tile_index = nullptr; f.close(); return; }
+            if (rec5[4] == 0) {  // circle: skip floor_m(2)+lat(4)+lon(4)+radius(2)
+                uint8_t skip[12];
+                if (f.read(skip, 12) != 12) { free(tile_index); tile_index = nullptr; f.close(); return; }
+            } else {             // polygon: floor_m(2)+n_pts(1)+clat(4)+clon(4), then n_pts*4
+                uint8_t ph[11];
+                if (f.read(ph, 11) != 11) { free(tile_index); tile_index = nullptr; f.close(); return; }
+                uint8_t n_pts = ph[2];
+                uint8_t skip4[4];
+                for (uint8_t j = 0; j < n_pts; j++) {
+                    if (f.read(skip4, 4) != 4) { free(tile_index); tile_index = nullptr; f.close(); return; }
                 }
             }
-            polygon_count++;
-            isFirstCoord = true;
-            continue;
         }
-        if (isFirstCoord)
-        {
-            firstCoord = parse_coordinate(line);
-            prevCoord = firstCoord;
-            isFirstCoord = false;
-            continue;
-        }
-        Coordinate currentCoord = parse_coordinate(line);
-        inside ^= checkEdge(origin.lat, origin.lon, prevCoord.lat, prevCoord.lon, currentCoord.lat, currentCoord.lon);
-        prevCoord = currentCoord;
-        reset_wdt(&last_wdt_reset);
+        country_offset = (uint32_t)f.position();
     }
-    return 0;
+
+    // Load country section into RAM
+    uint32_t file_size = (uint32_t)f.size();
+    if (country_offset < file_size) {
+        country_data_size = file_size - country_offset;
+        country_data = (uint8_t*)malloc(country_data_size);
+        if (country_data) {
+            f.seek(country_offset);
+            if (f.read(country_data, country_data_size) != country_data_size) {
+                free(country_data); country_data = nullptr; country_data_size = 0;
+            }
+        } else {
+            country_data_size = 0;
+        }
+    }
+
+    f.close();
+    files_read = true;
+}
+
+void FlightChecks::load_unlocked_zones()
+{
+    size_t len = sizeof(unlocked_zones);
+    if (!g.nvs_load_blob("zones_ok", unlocked_zones, &len)) {
+        n_unlocked = 0;
+        return;
+    }
+    n_unlocked = uint8_t(len / sizeof(uint32_t));
+}
+
+bool FlightChecks::zone_ok(uint32_t zone_id)
+{
+    if (is_zone_unlocked(zone_id)) return true;
+    if (n_unlocked >= 32) return false;
+    unlocked_zones[n_unlocked++] = zone_id;
+    g.nvs_save_blob("zones_ok", unlocked_zones, n_unlocked * sizeof(uint32_t));
+    return true;
+}
+
+bool FlightChecks::zone_lock(uint32_t zone_id)
+{
+    for (uint8_t i = 0; i < n_unlocked; i++) {
+        if (unlocked_zones[i] == zone_id) {
+            unlocked_zones[i] = unlocked_zones[--n_unlocked];
+            g.nvs_save_blob("zones_ok", unlocked_zones, n_unlocked * sizeof(uint32_t));
+            return true;
+        }
+    }
+    return false;
+}
+
+void FlightChecks::zone_clear()
+{
+    n_unlocked = 0;
+    g.nvs_save_blob("zones_ok", unlocked_zones, 0);
+}
+
+bool FlightChecks::is_zone_unlocked(uint32_t zone_id)
+{
+    for (uint8_t i = 0; i < n_unlocked; i++) {
+        if (unlocked_zones[i] == zone_id) return true;
+    }
+    return false;
 }
 
 bool FlightChecks::checkEdge(double x, double y, double x1, double y1, double x2, double y2)
-{ // Check if an imaginary straight line hits an egde
-    if (y > min(y1, y2) && y <= max(y1, y2) && x <= max(x1, x2))
-    {
-        if (y1 != y2)
-        {
+{
+    if (y > min(y1, y2) && y <= max(y1, y2) && x <= max(x1, x2)) {
+        if (y1 != y2) {
             double xinters = (y - y1) * (x2 - x1) / (y2 - y1) + x1;
             if (x1 == x2 || x <= xinters)
-            {
                 return true;
-            }
         }
     }
     return false;
 }
 
-bool FlightChecks::check_for_near_countries()
+double FlightChecks::degrees_to_radians(double degrees) { return degrees * PI / 180.0; }
+double FlightChecks::radians_to_degrees(double radians) { return radians * 180.0 / PI; }
+
+bool FlightChecks::check_circle(double lat, double lon,
+                                 double clat, double clon, double radius_m)
 {
-    File file = SPIFFS.open(FULL_COUNTRY_LIST, FILE_READ);
-    if (!file)
-    {
-        Serial.println("Failed to open file");
-        delay(1000);
-        return false;
+    double cos_lat = cos(clat * PI / 180.0);
+    if (cos_lat < 0.001) cos_lat = 0.001;
+    double dy = (lat - clat) * 111320.0;
+    double dx = (lon - clon) * 111320.0 * cos_lat;
+    return (dy * dy + dx * dx) <= (radius_m * radius_m);
+}
+
+bool FlightChecks::check_polygon_deltas(double lat, double lon,
+                                         double clat, double clon,
+                                         const uint8_t *delta_buf, uint8_t n_pts)
+{
+    if (n_pts < 3) return false;
+    double cos_lat = cos(clat * PI / 180.0);
+    if (cos_lat < 0.001) cos_lat = 0.001;
+    double py = (lat - clat) * 111320.0;          // meters north from centroid
+    double px = (lon - clon) * 111320.0 * cos_lat; // meters east
+    int crossings = 0;
+    for (uint8_t i = 0; i < n_pts; i++) {
+        uint8_t j = (i + 1) % n_pts;
+        int16_t dy_i, dx_i, dy_j, dx_j;
+        memcpy(&dy_i, delta_buf + i * 4,     2);
+        memcpy(&dx_i, delta_buf + i * 4 + 2, 2);
+        memcpy(&dy_j, delta_buf + j * 4,     2);
+        memcpy(&dx_j, delta_buf + j * 4 + 2, 2);
+        double y1 = dy_i * 10.0, x1 = dx_i * 10.0;
+        double y2 = dy_j * 10.0, x2 = dx_j * 10.0;
+        if ((y1 > py) != (y2 > py)) {
+            double xi = x1 + (py - y1) * (x2 - x1) / (y2 - y1);
+            if (px < xi) crossings++;
+        }
     }
+    return (crossings & 1) == 1;
+}
 
-    if (file.size() == 0)
-    {
-        file.close();
-        delay(1000);
-        return false;
-    }
-    // First we check if we're inside a banned country and save which country is
-    is_inside_banned_country = is_inside_polygon_file(file);
-    // Reset the pointer on the file reading
-    file.seek(0);
-    bool startedRegion = false;
-
-    Coordinate coord1;
-    Coordinate coord2;
-    Coordinate prevCoord;
-    Coordinate firstCoord;
-
-    bool isFirstCoord = true;
-    bool isFirstFoundCoord = false;
-
-    uint8_t polygon_count = 0;
-    uint8_t current_polygon_offset = 0;
-
-    while (file.available())
-    {
-        String line = file.readStringUntil('\n');
-        if (line.startsWith("#"))
-        { // New polygon
-            if (prevCoord.lat != firstCoord.lat && prevCoord.lon != firstCoord.lon && isFirstFoundCoord)
-            { // The current Polygon isn't closed
-                // Check if enough space in object
-                if ((country_coords_counter + EXTRA_COORDINATES_CLOSE_POLYGON) >= country_coords_size)
-                {
-                    if (!double_coords_array(COORDS_ARRAY_ID::COUNTRY))
-                        return false;
+bool FlightChecks::is_inside_country(double lat, double lon)
+{
+    if (!country_data || country_data_size < 2) return false;
+    uint16_t n_polys;
+    memcpy(&n_polys, country_data, 2);
+    uint32_t pos = 2;
+    for (uint16_t p = 0; p < n_polys; p++) {
+        if (pos + 2 > country_data_size) break;
+        uint16_t n_pts;
+        memcpy(&n_pts, country_data + pos, 2);
+        pos += 2;
+        uint32_t pts_bytes = (uint32_t)n_pts * 8U;
+        if (pos + pts_bytes > country_data_size) break;
+        if (n_pts >= 3) {
+            // closed ring: last point == first; iterate n_pts-1 edges
+            int crossings = 0;
+            for (uint16_t i = 0; i + 1 < n_pts; i++) {
+                uint16_t j = i + 1;
+                int32_t lat5_i, lon5_i, lat5_j, lon5_j;
+                memcpy(&lat5_i, country_data + pos + i * 8,     4);
+                memcpy(&lon5_i, country_data + pos + i * 8 + 4, 4);
+                memcpy(&lat5_j, country_data + pos + j * 8,     4);
+                memcpy(&lon5_j, country_data + pos + j * 8 + 4, 4);
+                double y1 = lat5_i * 1e-5, x1 = lon5_i * 1e-5;
+                double y2 = lat5_j * 1e-5, x2 = lon5_j * 1e-5;
+                if ((y1 > lat) != (y2 > lat)) {
+                    double xi = x1 + (lat - y1) * (x2 - x1) / (y2 - y1);
+                    if (lon < xi) crossings++;
                 }
-                close_polygon(firstCoord, prevCoord, polygon_count, current_polygon_offset);
             }
-            else if (isFirstFoundCoord)
-            { // We have more than 1 polygon, then we separate it by a 0,0 coordinate
-                if (country_coords_counter >= country_coords_size)
-                {
-                    if (!double_coords_array(COORDS_ARRAY_ID::COUNTRY))
-                        return false;
-                }
-                country_coords[country_coords_counter] = {0, 0};
-                country_coords_counter++;
-            }
-            current_polygon_offset = country_coords_counter;
-            polygon_count++;
-            isFirstCoord = true;
-            isFirstFoundCoord = false;
-            continue;
+            if (crossings & 1) return true;
         }
-
-        // Fisrt coord of polygon
-        if (isFirstCoord)
-        {
-            coord1 = parse_coordinate(line);
-            isFirstCoord = false;
-            continue;
-        }
-
-        // Check if the current coord hits a edge (with vertices on current coord and the previous one)
-        coord2 = parse_coordinate(line);
-        if (distance_from_point_to_line_segment(coord1, coord2) < MAX_DRONE_DISTANCE && country_coords_size < MAX_CLOSE_BORDERS_SIZE)
-        { // We only save those coordinates that the drone is able to reach
-            if ((country_coords_counter + 1) >= country_coords_size)
-            { // Double the object if neccesary
-                if (!double_coords_array(COORDS_ARRAY_ID::COUNTRY))
-                    return false;
-            }
-            if (coord1.lat != prevCoord.lat && coord1.lon != prevCoord.lon)
-            { // None of the coords are already in the object
-                country_coords[country_coords_counter] = coord1;
-                country_coords_counter++;
-                country_coords[country_coords_counter] = coord2;
-                country_coords_counter++;
-            }
-            else
-            { // The first coordinate is already in object, we only save the second
-                country_coords[country_coords_counter] = coord2;
-                country_coords_counter++;
-            }
-
-            if (!isFirstFoundCoord)
-            {
-                firstCoord = coord1;
-                isFirstFoundCoord = true;
-                check_countries = true;
-            }
-
-            prevCoord = coord2;
-        }
-
-        // Update the previous coord
-        coord1 = coord2;
+        pos += pts_bytes;
     }
-
-    file.close();
-    return true;
+    return false;
 }
 
-bool FlightChecks::double_coords_array(COORDS_ARRAY_ID coords_id)
+void FlightChecks::scan_tile(double lat, double lon, float alt_m,
+                              String &ret, bool &truncated)
 {
-    void **coord_ptr = nullptr;
-    uint16_t coord_size = 0;
-    size_t element_size = 0;
+    int8_t lt = (int8_t)floor(lat / tile_deg);
+    int8_t ln = (int8_t)floor(lon / tile_deg);
 
-    // Assing pointers and size depending on the object
-    switch (coords_id)
-    {
-    case COORDS_ARRAY_ID::COUNTRY:
-        coord_ptr = (void **)&country_coords;
-        // Duplicate size
-        country_coords_size *= 2;
-        coord_size = country_coords_size;
-        element_size = sizeof(Coordinate);
-        break;
-
-    case COORDS_ARRAY_ID::AIRPORT:
-        coord_ptr = (void **)&airport_coords;
-        // Duplicate size
-        airport_coords_size *= 2;
-        coord_size = airport_coords_size;
-        element_size = sizeof(AirportCoordinate);
-        break;
-
-    case COORDS_ARRAY_ID::PRISON:
-        coord_ptr = (void **)&prison_coords;
-        // Duplicate size
-        prison_coords_size *= 2;
-        coord_size = prison_coords_size;
-        element_size = sizeof(Coordinate);
-        break;
-
-    default:
-        return false;
+    // Binary search tile_index sorted by (lat_tile, lon_tile)
+    int lo = 0, hi = (int)n_tiles - 1, idx = -1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        int8_t ml = tile_index[mid].lat_tile, mn = tile_index[mid].lon_tile;
+        if (ml == lt && mn == ln) { idx = mid; break; }
+        if (ml < lt || (ml == lt && mn < ln)) lo = mid + 1;
+        else                                   hi = mid - 1;
     }
+    if (idx < 0) return;
 
-    void *temp_ptr = realloc(*coord_ptr, (coord_size)*element_size);
-    if (temp_ptr == NULL)
-    {
-        Serial.println("Realloc failed");
-        free(*coord_ptr);
-        return false;
-    }
+    // Load tile into cache when it changes (typically every ~444 km)
+    if (lt != cached_lat_tile || ln != cached_lon_tile) {
+        uint32_t tile_off = zones_data_off + tile_index[idx].offset;
+        uint32_t tile_end = (idx + 1 < (int)n_tiles)
+            ? zones_data_off + tile_index[idx + 1].offset
+            : country_offset;
+        uint32_t tile_bytes = tile_end - tile_off;
 
-    // We just double size of the current object
-    *coord_ptr = temp_ptr;
-    return true;
-}
+        free(tile_cache);
+        tile_cache = (uint8_t*)malloc(tile_bytes);
+        if (!tile_cache) return;
 
-bool FlightChecks::is_inside_polygon(uint8_t offset)
-{
-    if (country_coords_counter < 3)
-    { // It's not a polygon
-        return false;
-    }
-
-    bool inside_generated_polygon = false;
-    int count = 0;
-    int next;
-    Coordinate firstCoordinate = {0, 0};
-
-    for (int i = offset; i < country_coords_counter - 1; i++)
-    {
-        if (country_coords[i].lat == 0 && country_coords[i].lon == 0)
-        { // We reached the beginning of the next polygon
-            firstCoordinate = {0, 0};
-            continue;
+        File f = SPIFFS.open("/zones.bin", FILE_READ);
+        if (!f) { free(tile_cache); tile_cache = nullptr; return; }
+        f.seek(tile_off);
+        if (f.read(tile_cache, tile_bytes) != tile_bytes) {
+            f.close(); free(tile_cache); tile_cache = nullptr; return;
         }
-        next = (i + 1);
-        if (country_coords[next].lat == 0 && country_coords[next].lon == 0)
-        { // We reached the end of the current polygon
-            if (checkEdge(origin.lat, origin.lon, country_coords[i].lat, country_coords[i].lon, firstCoordinate.lat, firstCoordinate.lon))
-            {
-                count++;
-            }
-        }
-        else
-        { // Process current polygon
-            if (firstCoordinate.lat == 0 && firstCoordinate.lon == 0)
-            { // Saves the first coordinate
-                firstCoordinate.lat = country_coords[i].lat;
-                firstCoordinate.lon = country_coords[i].lon;
-            }
+        f.close();
+        cached_lat_tile  = lt;
+        cached_lon_tile  = ln;
+        tile_cache_bytes = tile_bytes;
+    }
 
-            if (checkEdge(origin.lat, origin.lon, country_coords[i].lat, country_coords[i].lon, country_coords[next].lat, country_coords[next].lon))
-            { // Checks if the current location hits an edge
-                count++;
+    if (tile_cache_bytes < 2) return;
+    uint16_t n_rec; memcpy(&n_rec, tile_cache, 2);
+    uint32_t pos = 2;
+    uint32_t reported_cats = 0;  // one tag per category, dedup within tile
+
+    for (uint16_t i = 0; i < n_rec && !truncated; i++) {
+        if (pos + 5 > tile_cache_bytes) break;
+        uint32_t zone_id; uint8_t shape;
+        memcpy(&zone_id, tile_cache + pos, 4);
+        shape = tile_cache[pos + 4];
+        pos += 5;
+
+        uint8_t cat = (uint8_t)(zone_id >> 27);
+
+        if (shape == 0) {  // circle: floor_m(2)+clat(4)+clon(4)+radius(2)=12
+            if (pos + 12 > tile_cache_bytes) break;
+            uint16_t floor_m; int32_t clat_i, clon_i; uint16_t radius;
+            memcpy(&floor_m, tile_cache + pos,      2);
+            memcpy(&clat_i,  tile_cache + pos + 2,  4);
+            memcpy(&clon_i,  tile_cache + pos + 6,  4);
+            memcpy(&radius,  tile_cache + pos + 10, 2);
+            pos += 12;
+            if (cat >= 17 || (g.options & CAT_BYPASS_BIT[cat])) continue;
+            if (is_zone_unlocked(zone_id))               continue;
+            if (floor_m > 0 && alt_m < (float)floor_m)  continue;
+            if (reported_cats & (1U << cat))             continue;
+            double clat = clat_i * 1e-5, clon = clon_i * 1e-5;
+            if (check_circle(lat, lon, clat, clon, (double)radius)) {
+                append_tag(ret, CAT_MSG[cat], truncated);
+                reported_cats |= (1U << cat);
+            }
+        } else {  // polygon: floor_m(2)+n_pts(1)+clat(4)+clon(4)=11, then n_pts*4
+            if (pos + 11 > tile_cache_bytes) break;
+            uint16_t floor_m; uint8_t n_pts; int32_t clat_i, clon_i;
+            memcpy(&floor_m, tile_cache + pos,     2);
+            n_pts = tile_cache[pos + 2];
+            memcpy(&clat_i,  tile_cache + pos + 3, 4);
+            memcpy(&clon_i,  tile_cache + pos + 7, 4);
+            pos += 11;
+            uint32_t delta_bytes = (uint32_t)n_pts * 4U;
+            if (pos + delta_bytes > tile_cache_bytes) break;
+            const uint8_t *delta_buf = tile_cache + pos;
+            pos += delta_bytes;
+            if (cat >= 17 || (g.options & CAT_BYPASS_BIT[cat])) continue;
+            if (is_zone_unlocked(zone_id))               continue;
+            if (floor_m > 0 && alt_m < (float)floor_m)  continue;
+            if (reported_cats & (1U << cat))             continue;
+            double clat = clat_i * 1e-5, clon = clon_i * 1e-5;
+            if (check_polygon_deltas(lat, lon, clat, clon, delta_buf, n_pts)) {
+                append_tag(ret, CAT_MSG[cat], truncated);
+                reported_cats |= (1U << cat);
             }
         }
     }
-    if (count % 2 == 1)
-    { // ray-casting algorithm, if the number is odd, then we are inside a polygon
-        inside_generated_polygon = true;
-    }
-    return inside_generated_polygon;
-}
-
-void FlightChecks::close_polygon(Coordinate firstCoord, Coordinate lastCoord, uint8_t polygon_count, uint8_t offset)
-{
-    double bearing_first = calculate_bearing(origin.lat, origin.lon, firstCoord.lat, firstCoord.lon);
-    double bearing_last = calculate_bearing(origin.lat, origin.lon, lastCoord.lat, lastCoord.lon);
-
-    Coordinate new_first_coord = destination_point(firstCoord.lat, firstCoord.lon, LINE_LENGHT, bearing_first);
-    Coordinate new_last_coord = destination_point(lastCoord.lat, lastCoord.lon, LINE_LENGHT, bearing_last);
-
-    double midpoint_lat = (new_first_coord.lat + new_last_coord.lat) / 2;
-    double midpoint_lon = (new_first_coord.lon + new_last_coord.lon) / 2;
-
-    double bearing_origin_midpoint = calculate_bearing(origin.lat, origin.lon, midpoint_lat, midpoint_lon);
-    Coordinate close_polygon_a = destination_point(origin.lat, origin.lon, LINE_LENGHT, bearing_origin_midpoint);
-    country_coords[country_coords_counter] = new_last_coord;
-    country_coords_counter++;
-    country_coords[country_coords_counter] = close_polygon_a;
-    country_coords_counter++;
-    country_coords[country_coords_counter] = new_first_coord;
-    country_coords_counter++;
-    country_coords[country_coords_counter] = firstCoord;
-    country_coords_counter++;
-    country_coords[country_coords_counter] = {0, 0};
-    country_coords_counter++;
-    check_final_polygon(bearing_origin_midpoint, polygon_count, offset);
-}
-
-void FlightChecks::check_final_polygon(double bearing_origin_midpoint, uint8_t polygon_count, uint8_t offset)
-{                                                              // Checks if the current coordinate is inside or outside the final polygon depending on wether it is on a restricted area
-    bool inside_generated_polygon = is_inside_polygon(offset); // check if is inside the polygon
-    if ((inside_generated_polygon && is_inside_banned_country != polygon_count) || (!inside_generated_polygon && is_inside_banned_country == polygon_count))
-    { // Changes a key coordinate to put in or take out the drone coordinate to the polygon
-        Coordinate close_polygon_b = destination_point(origin.lat, origin.lon, (LINE_LENGHT * -1), bearing_origin_midpoint);
-        country_coords[country_coords_counter - EXTRA_COORDINATES_CLOSE_POLYGON] = close_polygon_b;
-    }
-}
-
-float FlightChecks::distance_from_point_to_line_segment(Coordinate coord1, Coordinate coord2)
-{
-    double py = origin.lon;
-    double px = origin.lat;
-    double y1 = coord1.lon;
-    double x1 = coord1.lat;
-    double y2 = coord2.lon;
-    double x2 = coord2.lat;
-
-    // Calcute segment length
-    double seg_len_sq = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
-    if (seg_len_sq < 1e-9)
-    {
-        return dc.haversine(px, py, x1, y1); // It's not a segment but a point
-    }
-
-    // Projection of the point on the segment
-    double t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / seg_len_sq;
-    t = (t < 0) ? 0 : (t > 1) ? 1
-                              : t;
-
-    // Calculate the point on the nearest segment
-    double nearest_x = x1 + t * (x2 - x1);
-    double nearest_y = y1 + t * (y2 - y1);
-
-    return dc.haversine(px, py, nearest_x, nearest_y);
-}
-
-Coordinate FlightChecks::parse_coordinate(String line)
-{
-    Coordinate coord;
-    int commaIndex = line.indexOf(',');
-    if (commaIndex != -1)
-    {
-        String latStr = line.substring(0, commaIndex);
-        String lonStr = line.substring(commaIndex + 1);
-        coord.lat = latStr.toDouble();
-        coord.lon = lonStr.toDouble();
-    }
-    return coord;
-}
-
-AirportCoordinate FlightChecks::parse_airport_coordinate(String line)
-{
-    AirportCoordinate coord;
-    int firstComma = line.indexOf(',');
-    int secondComma = line.indexOf(',', firstComma + 1);
-    if (firstComma != -1 && secondComma != -1)
-    {
-        coord.type = static_cast<AIRPORT_TYPE>(line.substring(0, firstComma).toInt());
-        coord.lat = line.substring(firstComma + 1, secondComma).toDouble();
-        coord.lon = line.substring(secondComma + 1).toDouble();
-    }
-    return coord;
-}
-
-double FlightChecks::degrees_to_radians(double degrees)
-{
-    return degrees * PI / 180.0;
-}
-
-double FlightChecks::radians_to_degrees(double radians)
-{
-    return radians * 180.0 / PI;
-}
-
-// Function for calculating the bearing angle between two points
-double FlightChecks::calculate_bearing(double lat1, double lon1, double lat2, double lon2)
-{
-    lat1 = degrees_to_radians(lat1);
-    lon1 = degrees_to_radians(lon1);
-    lat2 = degrees_to_radians(lat2);
-    lon2 = degrees_to_radians(lon2);
-
-    double dlon = lon2 - lon1;
-
-    double x = sin(dlon) * cos(lat2);
-    double y = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dlon);
-
-    // Calculate the initial heading angle
-    double initial_bearing = atan2(x, y);
-
-    initial_bearing = initial_bearing * 180.0 / PI;
-
-    double compass_bearing = fmod((initial_bearing + 360.0), 360.0);
-
-    return compass_bearing;
-}
-
-Coordinate FlightChecks::destination_point(double lat, double lon, double distance, double bearing)
-{
-    double lat1 = degrees_to_radians(lat);
-    double lon1 = degrees_to_radians(lon);
-    double bearing_rad = degrees_to_radians(bearing);
-
-    // Calculate latitude of destination point
-    double lat2 = asin(sin(lat1) * cos(distance / EARTH_RADIUS) +
-                       cos(lat1) * sin(distance / EARTH_RADIUS) * cos(bearing_rad));
-
-    // Calculate longitude of destination point
-    double lon2 = lon1 + atan2(sin(bearing_rad) * sin(distance / EARTH_RADIUS) * cos(lat1),
-                               cos(distance / EARTH_RADIUS) - sin(lat1) * sin(lat2));
-
-    double lat_ret = round(radians_to_degrees(lat2) * 1e7) / 1e7;
-    double lon_ret = round(radians_to_degrees(lon2) * 1e7) / 1e7;
-    Coordinate ret = {lat_ret, lon_ret};
-    return ret;
 }
 
 String FlightChecks::is_flying_allowed()
 {
-    if ((g.options & OPTIONS_BYPASS_AIRPORT_CHECKS) && (g.options & OPTIONS_BYPASS_COUNTRY_CHECKS) && (g.options & OPTIONS_BYPASS_PRISON_CHECKS))
-    { // If by passed
-        return "";
-    }
-
-    if (!spiffs_mounted)
-    {
+    if (!spiffs_mounted) {
+        if (g.options & OPTIONS_BYPASS_SPIFFS) return "";
         return "FS ";
     }
+    if (origin.lat == 0 && origin.lon == 0) return "GPS ";
 
-    if (origin.lat == 0 && origin.lon == 0)
-    { // If we have no GPS position, then return
-        return "GPS ";
-    }
-
-    if (!files_read)
-    { // Only enters the first time when powered up
-        bool passed = true;
-            if (!(g.options & OPTIONS_BYPASS_AIRPORT_CHECKS))
-            {
-                passed &= check_for_near_airports();
-            }
-            if (!(g.options & OPTIONS_BYPASS_COUNTRY_CHECKS))
-            {
-                passed &= check_for_near_countries();
-            }
-            if (!(g.options & OPTIONS_BYPASS_PRISON_CHECKS))
-            {
-                passed &= check_for_near_prisons();
-            }
-            if (passed)
-            {
-                // Debug
-                /*
-                for (int i = 0; i < country_coords_counter; i++)
-                {
-                    Serial.printf("Save country coordinate %d: lat = %.7f, lon = %.7f\n", i + 1, country_coords[i].lat, country_coords[i].lon);
-                }
-
-                for (int i = 0; i < prison_coords_counter; i++)
-                {
-                    Serial.printf("Save prison coordinate %d: lat = %.7f, lon = %.7f\n", i + 1, prison_coords[i].lat, prison_coords[i].lon);
-                }
-
-                for (int i = 0; i < airport_coords_counter; i++)
-                {
-                    Serial.printf("Save airpot coordinate %d: lat = %.7f, lon = %.7f\n", i + 1, airport_coords[i].lat, airport_coords[i].lon);
-                }
-                */
-
-                files_read = true;
-        }
-        else
-        {
-            free(country_coords);
-            free(airport_coords);
-            free(prison_coords);
-            return "FILE ";
+    if (!files_read) {
+        load_zones_binary();
+        load_unlocked_zones();
+        if (!files_read) {
+            if (g.options & OPTIONS_BYPASS_SPIFFS) return "";
+            return "FS ";
         }
     }
 
-    if (check_airports && !(g.options & OPTIONS_BYPASS_AIRPORT_CHECKS) ? is_flying_near_an_airport() : false)
-    {
-        return "AIRPORT ";
-    }
+    String ret;
+    bool truncated = false;
 
-    if (check_prisons && !(g.options & OPTIONS_BYPASS_PRISON_CHECKS) ? is_flying_near_a_prison() : false)
-    {
-        return "PRISON ";
+    const uint32_t t0 = micros();
+    scan_tile(origin.lat, origin.lon, origin_alt_m, ret, truncated);
+    if (!truncated && !(g.options & OPTIONS_BYPASS_COUNTRY)) {
+        if (is_inside_country(origin.lat, origin.lon)) {
+            append_tag(ret, "COUNTRY ", truncated);
+        }
     }
+    last_scan_us = micros() - t0;
 
-    if (check_countries && !(g.options & OPTIONS_BYPASS_COUNTRY_CHECKS) ? is_inside_polygon() : is_inside_banned_country > 0 ? true
-                                                                             : false)
-    {
-        return "COUNTRY ";
-    }
-
-    return "";
+    return ret;
 }
 #endif
