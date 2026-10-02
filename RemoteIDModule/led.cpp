@@ -92,36 +92,20 @@ void Led::update(void)
     if (now_ms - last_extra_led_trig_ms > 100) {
 #ifdef AIRPORT_LED
         //Check parameter
-        if ((g.options & OPTIONS_BYPASS_AIRPORT_CHECKS)){
-            digitalWrite(AIRPORT_LED, HIGH);
-        }
-        else{
-            digitalWrite(AIRPORT_LED, LOW);
-        }
+        // AIRPORT_LED: any airport / FAA / EU zone bypass active
+        digitalWrite(AIRPORT_LED, (g.options & OPTIONS_BYPASS_ZONES_MASK) ? HIGH : LOW);
 #endif
 #ifdef COUNTRY_LED
-        if ((g.options & OPTIONS_BYPASS_COUNTRY_CHECKS)){
-            digitalWrite(COUNTRY_LED, HIGH);
-        }
-        else{
-            digitalWrite(COUNTRY_LED, LOW);
-        }
+        // COUNTRY_LED: country bypass active
+        digitalWrite(COUNTRY_LED, (g.options & OPTIONS_BYPASS_COUNTRY) ? HIGH : LOW);
 #endif
 #ifdef PRISON_LED
-        if ((g.options & OPTIONS_BYPASS_PRISON_CHECKS)){
-            digitalWrite(PRISON_LED, HIGH);
-        }
-        else{
-            digitalWrite(PRISON_LED, LOW);
-        }
+        // PRISON_LED: prison or stadium bypass active
+        digitalWrite(PRISON_LED, (g.options & OPTIONS_BYPASS_ENCLOSURES_MASK) ? HIGH : LOW);
 #endif
 #ifdef EXTRA_LED
-        if ((g.options & OPTIONS_FORCE_ARM_OK)){
-            digitalWrite(EXTRA_LED, HIGH);
-        }
-        else{
-            digitalWrite(EXTRA_LED, LOW);
-        }
+        // EXTRA_LED: RID checks bypass active
+        digitalWrite(EXTRA_LED, (g.options & OPTIONS_BYPASS_RID_CHECKS) ? HIGH : LOW);
 #endif
         last_extra_led_trig_ms=now_ms;
     }

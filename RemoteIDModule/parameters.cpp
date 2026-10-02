@@ -37,28 +37,11 @@ const Parameters::Param Parameters::params[] = {
     { "PUBLIC_KEY4",       Parameters::ParamType::CHAR64, (const void*)&g.public_keys[3], },
     { "PUBLIC_KEY5",       Parameters::ParamType::CHAR64, (const void*)&g.public_keys[4], },
     { "MAVLINK_SYSID",     Parameters::ParamType::UINT8,  (const void*)&g.mavlink_sysid,    0, 0, 254 },
-    { "OPTIONS",           Parameters::ParamType::UINT8,  (const void*)&g.options,          0, 0, 254 },
-#if defined(BOARD_AURELIA_RID_S3)
-    { "MIN_PRISON",        Parameters::ParamType::FLOAT,  (const void*)&g.min_prison_dis,        2.4, 0, 30},
-    { "MIN_LG_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_lg_airport_dis,        10.15, 0, 30},
-    { "MIN_MD_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_md_airport_dis,        5, 0, 30},
-    { "MIN_SM_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_sm_airport_dis,        3, 0, 30},
-    { "MIN_SP_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_sp_airport_dis,        5, 0, 30},
-    { "MIN_HB_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_hb_airport_dis,        5, 0, 30},
-    { "MIN_TEST_AIRPORT",  Parameters::ParamType::FLOAT,  (const void*)&g.min_test_airport_dis,        0, 0, 30},
-    { "MIN_HP_AIRPORT",    Parameters::ParamType::FLOAT,  (const void*)&g.min_hp_airport_dis,        4.5, 0, 30},
-#endif
+    { "OPTIONS",           Parameters::ParamType::UINT32, (const void*)&g.options,          0, 0, 0xFFFFF },
     { "TO_DEFAULTS",       Parameters::ParamType::UINT8,  (const void*)&g.to_factory_defaults,    0, 0, 1 }, //if set to 1, reset to factory defaults and make 0.
     { "DONE_INIT",         Parameters::ParamType::UINT8,  (const void*)&g.done_init,        0, 0, 0, PARAM_FLAG_HIDDEN},
     { "",                  Parameters::ParamType::NONE,   nullptr,  },
 };
-
-#if defined(BOARD_AURELIA_RID_S3)
-void Parameters::reset_min_test_distance(){
-    const Param *vp = find((char *)"MIN_TEST_AIRPORT");
-    vp->set_float(0);
-}
-#endif
 
 /*
   get count of parameters capable of being converted to load
@@ -369,10 +352,6 @@ void Parameters::init(void)
         nvs_flash_erase();
         esp_restart();
     }
-#if defined(BOARD_AURELIA_RID_S3)
-    reset_min_test_distance();
-#endif
-
     if (g.done_init == 0) {
         set_by_name_uint8("DONE_INIT", 1);
         // setup public keys
@@ -538,6 +517,17 @@ bool Parameters::get_private_key(uint8_t seed[32]) const
         Serial.printf("get_private_key failed: 0x%x len=%u\n", err, (unsigned)len);
     }
     return err == ESP_OK && len == 32;
+}
+
+bool Parameters::nvs_save_blob(const char *key, const void *buf, size_t len)
+{
+    return nvs_set_blob(handle, key, buf, len) == ESP_OK &&
+           nvs_commit(handle) == ESP_OK;
+}
+
+bool Parameters::nvs_load_blob(const char *key, void *buf, size_t *len)
+{
+    return nvs_get_blob(handle, key, buf, len) == ESP_OK;
 }
 
 bool Parameters::set_private_key(const uint8_t seed[32])

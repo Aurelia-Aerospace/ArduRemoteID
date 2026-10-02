@@ -37,7 +37,7 @@ uint8_t Transport::status_check(const char *&reason)
     uint8_t status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
 
      //return status OK if we have enabled the force arm option
-    if ((g.options & OPTIONS_FORCE_ARM_OK)) {
+    if ((g.options & OPTIONS_BYPASS_RID_CHECKS)) {
         if(reason == nullptr){
             status = MAV_ODID_ARM_STATUS_GOOD_TO_ARM;
         }

@@ -179,6 +179,7 @@ const char *check_flight_area()
  */
 static const char *check_parse(void)
 {
+    if (g.options & OPTIONS_BYPASS_RID_CHECKS) return nullptr;
     String ret = "";
 
     {
@@ -190,7 +191,8 @@ static const char *check_parse(void)
         else
         {
 #if AP_DRONECAN_ENABLED && defined(BOARD_AURELIA_RID_S3)
-            flight_checks.update_location(UAS_data.Location.Latitude, UAS_data.Location.Longitude);
+            flight_checks.update_location(UAS_data.Location.Latitude, UAS_data.Location.Longitude,
+                                          (float)UAS_data.Location.AltitudeGeo);
 #endif
         }
     }
