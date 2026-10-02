@@ -11,6 +11,7 @@
 #include "led.h"
 #include <esp_wifi.h>
 #include "parameters.h"
+#include "flight_checker.h"
 #include <stdarg.h>
 #include "util.h"
 #include "monocypher.h"
@@ -843,19 +844,51 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
     }
 
     if (req.operation == DRONECAN_REMOTEID_SECURECOMMAND_REQUEST_SECURE_COMMAND_OTA_BEGIN) {
-        // Synchronous pre-erase: block until esp_ota_begin completes, then reply.
-        // The FC holds the MAVLink OTA_BEGIN reply until it gets this ACCEPTED.
         if (req.data.len < 4) {
             reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_DENIED;
             goto send_reply;
         }
         if (_ota_active) {
-            esp_ota_abort(_ota_handle);
+            if (!_ota_is_spiffs) esp_ota_abort(_ota_handle);
             _ota_active = false;
             esp_wifi_start();
         }
         uint32_t fw_size = 0;
         memcpy(&fw_size, req.data.data, sizeof(fw_size));
+        // Byte 4 (optional): 0 = firmware OTA, 1 = zones SPIFFS OTA
+        _ota_is_spiffs = (req.data.len >= 5) && (req.data.data[4] == 1);
+
+        if (_ota_is_spiffs) {
+            _ota_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+                                                  ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+            if (_ota_part == nullptr) {
+                Serial.printf("OTA zones: no SPIFFS partition\n");
+                _ota_show_fail = true;
+                reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
+                goto send_reply;
+            }
+            SPIFFS.end();  // unmount before erasing
+            esp_wifi_stop();
+            uint32_t erase_size = (fw_size + 0xFFFU) & ~0xFFFU;
+            if (erase_size > _ota_part->size) erase_size = _ota_part->size;
+            Serial.printf("OTA zones: erasing %u bytes...\n", (unsigned)erase_size);
+            esp_err_t err = esp_partition_erase_range(_ota_part, 0, erase_size);
+            if (err != ESP_OK) {
+                Serial.printf("OTA zones: erase failed: %s\n", esp_err_to_name(err));
+                _ota_show_fail = true;
+                esp_wifi_start();
+                reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
+                goto send_reply;
+            }
+            _zones_write_offset = 0;
+            _ota_active = true;
+            _ota_show_fail = false;
+            Serial.printf("OTA zones: ready\n");
+            reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_ACCEPTED;
+            goto send_reply;
+        }
+
+        // Firmware OTA (original path)
         _ota_part = esp_ota_get_next_update_partition(nullptr);
         if (_ota_part == nullptr) {
             Serial.printf("OTA: no OTA partition\n");
@@ -895,6 +928,55 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
         if (!_ota_active) {
             Serial.printf("OTA: chunk received but no active session\n");
             reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_DENIED;
+            goto send_reply;
+        }
+
+        if (_ota_is_spiffs) {
+            if (!last) {
+                reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_ACCEPTED;
+                dronecan_send_secure_reply(ins, transfer, reply);
+                processTx();
+                if (chunk_len > 0) {
+                    esp_err_t err = esp_partition_write(_ota_part, _zones_write_offset, chunk, chunk_len);
+                    if (err != ESP_OK) {
+                        Serial.printf("OTA zones: write failed at %lu: %s\n",
+                                      (unsigned long)_zones_write_offset, esp_err_to_name(err));
+                        _ota_active = false;
+                        _ota_show_fail = true;
+                        esp_wifi_start();
+                    } else {
+                        _zones_write_offset += chunk_len;
+                    }
+                }
+                return;
+            }
+            // Last chunk
+            if (chunk_len > 0) {
+                esp_err_t err = esp_partition_write(_ota_part, _zones_write_offset, chunk, chunk_len);
+                if (err != ESP_OK) {
+                    Serial.printf("OTA zones: write failed (last) at %lu: %s\n",
+                                  (unsigned long)_zones_write_offset, esp_err_to_name(err));
+                    _ota_active = false;
+                    _ota_show_fail = true;
+                    esp_wifi_start();
+                    reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
+                    goto send_reply;
+                }
+                _zones_write_offset += chunk_len;
+            }
+            _ota_active = false;
+            if (!CheckFirmware::check_spiffs_partition(_ota_part, _zones_write_offset)) {
+                Serial.printf("OTA zones: signature check FAILED\n");
+                _ota_show_fail = true;
+                esp_wifi_start();
+                reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_DENIED;
+                goto send_reply;
+            }
+            Serial.printf("OTA zones: signature OK — reloading\n");
+            SPIFFS.end();
+            flight_checks.init();
+            esp_wifi_start();
+            reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_ACCEPTED;
             goto send_reply;
         }
 
@@ -979,7 +1061,15 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
             char *eq = strchr(command, '=');
             if (eq != nullptr) {
                 *eq = 0;
-                if (!g.set_by_name_string(command, eq+1)) {
+                if (strcmp(command, "ZONE_OK") == 0) {
+                    if (!flight_checks.zone_ok(strtoul(eq+1, nullptr, 0))) {
+                        reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
+                    }
+                } else if (strcmp(command, "ZONE_LOCK") == 0) {
+                    flight_checks.zone_lock(strtoul(eq+1, nullptr, 0));
+                } else if (strcmp(command, "ZONE_CLEAR") == 0) {
+                    flight_checks.zone_clear();
+                } else if (!g.set_by_name_string(command, eq+1)) {
                     reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
                 }
             }

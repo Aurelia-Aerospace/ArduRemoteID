@@ -75,6 +75,10 @@ private:
     bool _ota_reboot_pending;
     bool _ota_show_fail;
 
+    // zones (SPIFFS) OTA state — active when _ota_is_spiffs && _ota_active
+    bool     _ota_is_spiffs;
+    uint32_t _zones_write_offset;
+
 public:
     void onTransferReceived(CanardInstance* ins, CanardRxTransfer* transfer);
     bool shouldAcceptTransfer(const CanardInstance* ins,
