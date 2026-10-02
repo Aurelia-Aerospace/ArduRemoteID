@@ -70,7 +70,7 @@ aurelia-rid-s3: CHIP_OPTS=:FlashSize=8M,FlashMode=dio
 aurelia-rid-s3: FLASH_SIZE=8MB
 aurelia-rid-s3: PART_SIZE=$(APP_PARTITION_SIZE_S3)
 aurelia-rid-s3: SIGN_KEY=25
-aurelia-rid-s3: SPIFFS_ARG=0x3D4000 spiffs/spiffs_gen.bin
+aurelia-rid-s3: SPIFFS_ARG=0x3D4000 spiffs_gen.bin
 aurelia-rid-s3: ArduRemoteID-AURELIA_RID_S3.bin
 
 setup:
@@ -86,9 +86,9 @@ gitversion:
 headers: gitversion
 	@cd .. && scripts/regen_headers.sh
 
-spiffs: 
+spiffs:
 	@echo "Generating spiffs"
-	@../scripts/spiffsgen.py 0x3D0000 airport_check/ spiffs/spiffs_gen.bin keys/AureliaKeys_private_key.dat 25
+	@../scripts/spiffsgen.py 0x3D0000 spiffs/ spiffs_gen.bin keys/AureliaKeys_private_key.dat 25
 
 romfs_files.h: web/*.html web/js/*.js web/styles/*css web/images/*.jpg public_keys/*.dat
 	@../scripts/make_romfs.py romfs_files.h web/*.html web/js/*.js web/styles/*css web/images/*.jpg public_keys/*.dat
