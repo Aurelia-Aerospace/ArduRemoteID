@@ -93,6 +93,50 @@ hr.zt-sep{border:none;border-top:1px solid #222;margin:7px 0}
 #cs-err{position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);
   background:#180000;color:#ff5a5a;font-size:11px;padding:4px 10px;border-radius:4px;
   border:1px solid #3e0000;white-space:nowrap;display:none}
+#db{position:fixed;bottom:22px;left:14px;z-index:9999;
+  background:rgba(12,12,12,.95);color:#c0c0c0;font:12px/1 system-ui,sans-serif;
+  padding:8px 14px;border-radius:6px;border:1px solid #2e2e2e;cursor:pointer;
+  display:flex;gap:7px;align-items:center;box-shadow:0 2px 14px rgba(0,0,0,.6);
+  transition:background .12s,color .12s,border-color .12s}
+#db:hover{background:rgba(24,24,24,.97);color:#e0e0e0}
+#db.db-a{border-color:#4a4a22;color:#c8c060;background:rgba(18,16,4,.97)}
+#dh{display:none;position:fixed;bottom:62px;left:14px;z-index:9998;
+  background:rgba(12,12,12,.92);color:#787878;font:11px/1.5 system-ui,sans-serif;
+  padding:7px 12px;border-radius:5px;border:1px solid #282818;
+  box-shadow:0 2px 12px rgba(0,0,0,.5);gap:10px;align-items:center}
+#dh-fin{padding:3px 10px;background:#1a1a08;border:1px solid #3a3a1a;border-radius:3px;
+  color:#b8b840;cursor:pointer;font:11px system-ui,sans-serif;transition:background .12s;flex-shrink:0}
+#dh-fin:hover{background:#252510}
+#dr{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  z-index:10002;background:rgba(10,10,10,.98);color:#d4d4d4;
+  font:12px/1.5 system-ui,sans-serif;border-radius:8px;border:1px solid #282828;
+  box-shadow:0 8px 40px rgba(0,0,0,.85);width:340px;max-height:70vh;
+  flex-direction:column;overflow:hidden}
+#dr-hd{display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px;border-bottom:1px solid #1e1e1e;flex-shrink:0}
+#dr-hd h3{margin:0;font-size:13px;font-weight:600;color:#f0f0f0}
+#dr-cl{background:none;border:none;color:#666;cursor:pointer;font-size:16px;
+  line-height:1;padding:2px 4px;border-radius:3px;transition:color .12s}
+#dr-cl:hover{color:#aaa}
+#dr-list{overflow-y:auto;padding:10px 16px;flex:1;min-height:0}
+#dr-list::-webkit-scrollbar{width:4px}
+#dr-list::-webkit-scrollbar-track{background:transparent}
+#dr-list::-webkit-scrollbar-thumb{background:#2a2a2a;border-radius:2px}
+.dr-empty{color:#484848;text-align:center;padding:20px 0;font-size:12px}
+.dr-group{margin-bottom:8px}
+.dr-ghead{color:#484848;font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.1em;padding:8px 0 4px;border-top:1px solid #1a1a1a;margin-bottom:2px}
+.dr-group:first-child .dr-ghead{border-top:none;padding-top:2px}
+.dr-item{display:flex;gap:10px;align-items:center;padding:2px 0}
+.dr-tag{color:#686868;font-size:11px;font-family:monospace;min-width:72px}
+.dr-zid{font-family:monospace;font-size:11px;color:#c8c8c8}
+#dr-ft{display:flex;gap:8px;padding:10px 16px;border-top:1px solid #1e1e1e;
+  flex-shrink:0;align-items:center}
+#dr-cp{flex:1;padding:7px 12px;background:#1e1e1e;border:1px solid #383838;border-radius:5px;
+  color:#b8b8b8;font:12px system-ui,sans-serif;cursor:pointer;
+  transition:background .15s,color .15s}
+#dr-cp:hover{background:#282828;color:#d8d8d8}
+#dr-cnt{color:#484848;font-size:11px;white-space:nowrap}
 </style>"""
 
 _STATIC_HTML = """\
@@ -103,6 +147,28 @@ _STATIC_HTML = """\
     <path d="M2 8a6 6 0 1 1 1.5 4.2"/><polyline points="1,5 2,8 5,7"/>
   </svg>
   <span id="rb-n"></span>
+</div>
+<button id="db" onclick="window._toggleDraw()">
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="8,2 14,7 11,14 5,14 2,7"/>
+  </svg>
+  Draw Zone
+</button>
+<div id="dh">
+  <span>Click to add vertices &nbsp;&middot;&nbsp; Right-click or Finish to close &nbsp;&middot;&nbsp; Esc to cancel</span>
+  <button id="dh-fin" onclick="window._finishDraw()">Finish</button>
+</div>
+<div id="dr">
+  <div id="dr-hd">
+    <h3>Zones in drawn area</h3>
+    <button id="dr-cl" onclick="document.getElementById('dr').style.display='none'">&#x2715;</button>
+  </div>
+  <div id="dr-list"></div>
+  <div id="dr-ft">
+    <button id="dr-cp" onclick="window._copyIds()">Copy for SET_SECURE_CONFIG</button>
+    <span id="dr-cnt"></span>
+  </div>
 </div>"""
 
 # JS template — __MAP__ replaced at runtime with the folium map variable name
@@ -110,7 +176,9 @@ _JS_TEMPLATE = """\
 <script>
 (function(){
 var _l={},_h={},_fgs={},_cm=null,_tt=null;
+var _mp=null,_dv=[],_dPoly=null,_dDots=[],_dPrev=null,_dMode=false,_drz=[];
 
+// ── Zone hit-test ─────────────────────────────────────────────────────────────
 function _pip(lat,lon,z){
   if(z.t==='c'){
     var dy=(lat-z.clat)*111320,dx=(lon-z.clon)*111320*Math.cos(z.clat*Math.PI/180);
@@ -135,10 +203,76 @@ function _at(lat,lon,all){
   return res;
 }
 
+// ── Draw-polygon intersection geometry ───────────────────────────────────────
+function _segsX(ax,ay,bx,by,cx,cy,dx,dy){
+  var d1x=bx-ax,d1y=by-ay,d2x=dx-cx,d2y=dy-cy;
+  var cross=d1x*d2y-d1y*d2x;
+  if(Math.abs(cross)<1e-10)return false;
+  var tx=cx-ax,ty=cy-ay;
+  var t=(tx*d2y-ty*d2x)/cross,u=(tx*d1y-ty*d1x)/cross;
+  return t>=0&&t<=1&&u>=0&&u<=1;
+}
+function _pipArr(lat,lon,ring){
+  var n=ring.length,ins=false,j=n-1;
+  for(var i=0;i<n;j=i++){
+    var yi=ring[i][0],xi=ring[i][1],yj=ring[j][0],xj=ring[j][1];
+    if((yi>lat)!=(yj>lat)&&lon<(xj-xi)*(lat-yi)/(yj-yi)+xi)ins=!ins;
+  }
+  return ins;
+}
+function _ptSegDsq(px,py,ax,ay,bx,by){
+  var dx=bx-ax,dy=by-ay,len2=dx*dx+dy*dy;
+  if(len2<1e-12)return (px-ax)*(px-ax)+(py-ay)*(py-ay);
+  var t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/len2));
+  var rx=ax+t*dx-px,ry=ay+t*dy-py;
+  return rx*rx+ry*ry;
+}
+function _circleHits(clat,clon,r,ring){
+  if(_pipArr(clat,clon,ring))return true;
+  var cos=Math.cos(clat*Math.PI/180),n=ring.length,r2=r*r;
+  for(var i=0;i<n;i++){
+    var dy=(ring[i][0]-clat)*111320,dx=(ring[i][1]-clon)*111320*cos;
+    if(dy*dy+dx*dx<=r2)return true;
+  }
+  for(var i=0,j=n-1;i<n;j=i++){
+    var ay=(ring[j][0]-clat)*111320,ax=(ring[j][1]-clon)*111320*cos;
+    var by=(ring[i][0]-clat)*111320,bx=(ring[i][1]-clon)*111320*cos;
+    if(_ptSegDsq(0,0,ax,ay,bx,by)<=r2)return true;
+  }
+  return false;
+}
+function _polyHits(pts,ring){
+  var n1=pts.length,n2=ring.length;
+  for(var i=0;i<n1;i++)if(_pipArr(pts[i][0],pts[i][1],ring))return true;
+  for(var i=0;i<n2;i++)if(_pipArr(ring[i][0],ring[i][1],pts))return true;
+  for(var i=0,j=n1-1;i<n1;j=i++)
+    for(var k=0,l=n2-1;k<n2;l=k++)
+      if(_segsX(pts[j][0],pts[j][1],pts[i][0],pts[i][1],
+                ring[l][0],ring[l][1],ring[k][0],ring[k][1]))return true;
+  return false;
+}
+function _findInDraw(ring){
+  var rl0=Infinity,rl1=-Infinity,rn0=Infinity,rn1=-Infinity;
+  for(var i=0;i<ring.length;i++){
+    if(ring[i][0]<rl0)rl0=ring[i][0];if(ring[i][0]>rl1)rl1=ring[i][0];
+    if(ring[i][1]<rn0)rn0=ring[i][1];if(ring[i][1]>rn1)rn1=ring[i][1];
+  }
+  var seen={},res=[];
+  for(var i=0;i<ZONE_DATA.length;i++){
+    var z=ZONE_DATA[i],b=z.b;
+    if(b[1]<rl0||b[0]>rl1||b[3]<rn0||b[2]>rn1)continue;
+    if(seen[z.zid])continue;
+    var hit=(z.t==='c')?_circleHits(z.clat,z.clon,z.r,ring):_polyHits(z.pts,ring);
+    if(hit){seen[z.zid]=1;res.push(z);}
+  }
+  res.sort(function(a,b){return a.cat-b.cat||(a.zid<b.zid?-1:a.zid>b.zid?1:0);});
+  return res;
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
 function _showTt(hits,cx,cy){
   _tt=_tt||document.getElementById('zt');
   if(!hits.length){_tt.style.display='none';return;}
-  // Deduplicate by zone ID (same ID = same zone in multiple tiles)
   var seen={},deduped=[];
   for(var k=0;k<hits.length;k++){var zid=ZONE_DATA[hits[k]].zid;if(!seen[zid]){seen[zid]=1;deduped.push(hits[k]);}}
   var h='';
@@ -160,14 +294,12 @@ function _showTt(hits,cx,cy){
   _tt.style.left=x+'px';_tt.style.top=y+'px';
 }
 
+// ── Hide / show zones ─────────────────────────────────────────────────────────
 function _setVis(zi,show){
   var l=_l[zi];if(!l)return;
-  if(show){
-    var st=CAT_STYLES[ZONE_DATA[zi].cat];
-    l.setStyle({color:st[1],fillColor:st[0],weight:st[2],opacity:.85,fillOpacity:st[3]});
-  }else{
-    l.setStyle({opacity:0,fillOpacity:0});
-  }
+  if(show){var st=CAT_STYLES[ZONE_DATA[zi].cat];
+    l.setStyle({color:st[1],fillColor:st[0],weight:st[2],opacity:.85,fillOpacity:st[3]});}
+  else{l.setStyle({opacity:0,fillOpacity:0});}
 }
 function _hideZone(zi){_setVis(zi,false);_h[zi]=1;_upBtn();}
 function _showZone(zi){_setVis(zi,true);delete _h[zi];_upBtn();}
@@ -180,15 +312,12 @@ function _upBtn(){
   document.getElementById('rb-n').textContent=n+(n===1?' hidden zone':' hidden zones');
 }
 
-function _clMenu(){
-  if(_cm){_cm.remove();_cm=null;}
-  document.removeEventListener('click',_clMenu);
-}
+// ── Context menu ──────────────────────────────────────────────────────────────
+function _clMenu(){if(_cm){_cm.remove();_cm=null;}document.removeEventListener('click',_clMenu);}
 
 function _rclick(lat,lon,cx,cy){
   _clMenu();
-  var vis=_at(lat,lon,false);
-  var hid=_at(lat,lon,true).filter(function(i){return!!_h[i];});
+  var vis=_at(lat,lon,false),hid=_at(lat,lon,true).filter(function(i){return!!_h[i];});
   if(!vis.length&&!hid.length)return;
   var items=[];
   vis.forEach(function(i){var z=ZONE_DATA[i];items.push({l:'Hide — '+z.f+' ('+z.tag+')',fn:function(){_hideZone(i);}});});
@@ -197,7 +326,7 @@ function _rclick(lat,lon,cx,cy){
   _cm=document.createElement('div');_cm.id='zmenu';
   var sep=false;
   items.forEach(function(it,k){
-    if(!sep&&k>0&&it.l[0]==='S'&&items[k-1].l[0]==='H'){sep=true;}
+    if(!sep&&k>0&&it.l[0]==='S'&&items[k-1].l[0]==='H')sep=true;
     var d=document.createElement('div');
     d.className='zmenu-i'+(sep&&it.l[0]==='S'&&(k===0||items[k-1].l[0]==='H')?' zmenu-s':'');
     d.textContent=it.l;
@@ -211,14 +340,14 @@ function _rclick(lat,lon,cx,cy){
   setTimeout(function(){document.addEventListener('click',_clMenu,{once:true});},0);
 }
 
+// ── Layer control styling ─────────────────────────────────────────────────────
 function _styleCtrl(mp,base){
   setTimeout(function(){
-    // Replace radio buttons with pill toggle
     var bs=document.querySelector('.leaflet-control-layers-base');
     if(bs){
       var pill=document.createElement('div');pill.id='bt';
       var bk=Object.keys(base);
-      bk.forEach(function(name,i){
+      bk.forEach(function(name){
         var btn=document.createElement('button');
         btn.className='bt-b'+(mp.hasLayer(base[name])?' bt-a':'');
         btn.textContent=name;
@@ -233,76 +362,190 @@ function _styleCtrl(mp,base){
       });
       bs.replaceWith(pill);
     }
-    // Group headers + color swatches on overlay labels
     var olbls=document.querySelectorAll('.leaflet-control-layers-overlays label');
     var lastGrp=null;
     olbls.forEach(function(lbl,i){
       var c=ZONE_CATS[i];if(!c)return;
       if(c.group&&c.group!==lastGrp){
-        var hdr=document.createElement('div');
-        hdr.className='lz-grp';hdr.textContent=c.group;
-        lbl.parentNode.insertBefore(hdr,lbl);
-        lastGrp=c.group;
+        var hdr=document.createElement('div');hdr.className='lz-grp';hdr.textContent=c.group;
+        lbl.parentNode.insertBefore(hdr,lbl);lastGrp=c.group;
       }
       var st=CAT_STYLES[c.cat];if(!st)return;
       var sp=lbl.querySelector('span');if(!sp)return;
-      var sw=document.createElement('i');
-      sw.className='lz-sw';sw.style.background=st[0];sw.style.borderColor=st[1];
+      var sw=document.createElement('i');sw.className='lz-sw';
+      sw.style.background=st[0];sw.style.borderColor=st[1];
       sp.insertBefore(sw,sp.firstChild);
     });
   },150);
 }
 
+// ── Draw polygon tool ─────────────────────────────────────────────────────────
+function _clearDraw(){
+  _dDots.forEach(function(d){if(_mp&&_mp.hasLayer(d))_mp.removeLayer(d);});
+  _dDots=[];
+  if(_dPoly&&_mp&&_mp.hasLayer(_dPoly)){_mp.removeLayer(_dPoly);_dPoly=null;}
+  if(_dPrev&&_mp&&_mp.hasLayer(_dPrev)){_mp.removeLayer(_dPrev);_dPrev=null;}
+}
+window._clearDrawPoly=_clearDraw;
+
+function _dbLabel(active){
+  var btn=document.getElementById('db');if(!btn)return;
+  if(active){btn.textContent='✕ Cancel';btn.classList.add('db-a');}
+  else{
+    btn.innerHTML='<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"'
+      +' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+      +'<polygon points="8,2 14,7 11,14 5,14 2,7"/></svg> Draw Zone';
+    btn.classList.remove('db-a');
+  }
+}
+
+function _startDraw(){
+  _dMode=true;_dv=[];
+  _clearDraw();
+  _dbLabel(true);
+  var dh=document.getElementById('dh');if(dh)dh.style.display='flex';
+  if(_mp)_mp.getContainer().style.cursor='crosshair';
+}
+function _cancelDraw(){
+  _dMode=false;_dv=[];
+  _clearDraw();
+  _dbLabel(false);
+  var dh=document.getElementById('dh');if(dh)dh.style.display='none';
+  if(_mp)_mp.getContainer().style.cursor='';
+}
+function _toggleDraw(){if(_dMode)_cancelDraw();else _startDraw();}
+window._toggleDraw=_toggleDraw;
+
+function _addVert(lat,lon){
+  _dv.push([lat,lon]);
+  var dot=L.circleMarker([lat,lon],{radius:4,color:'#c8c060',fillColor:'#c8c060',
+    fillOpacity:1,weight:1.5,interactive:false}).addTo(_mp);
+  _dDots.push(dot);
+  if(_dv.length>=2){
+    var ring=_dv.length>=3?_dv.concat([_dv[0]]):_dv;
+    if(_dPoly){_dPoly.setLatLngs(ring);}
+    else{_dPoly=L.polyline(ring,{color:'#c8c060',weight:1.5,dashArray:'6,4',
+      opacity:.85,interactive:false}).addTo(_mp);}
+  }
+}
+
+function _updatePrev(lat,lon){
+  if(!_dv.length)return;
+  var last=_dv[_dv.length-1],pts=[last,[lat,lon]];
+  if(_dPrev){_dPrev.setLatLngs(pts);}
+  else{_dPrev=L.polyline(pts,{color:'#c8c060',weight:1.2,dashArray:'3,5',
+    opacity:.5,interactive:false}).addTo(_mp);}
+}
+
+function _finishDraw(){
+  if(_dv.length<3){_cancelDraw();return;}
+  if(_dPrev&&_mp.hasLayer(_dPrev)){_mp.removeLayer(_dPrev);_dPrev=null;}
+  if(_dPoly)_dPoly.setStyle({dashArray:null,opacity:1,weight:2});
+  var ring=_dv.slice();
+  _dMode=false;
+  _dbLabel(false);
+  var dh=document.getElementById('dh');if(dh)dh.style.display='none';
+  if(_mp)_mp.getContainer().style.cursor='';
+  _drz=_findInDraw(ring);
+  _showDrawResult(_drz);
+}
+window._finishDraw=_finishDraw;
+
+function _showDrawResult(zones){
+  var dlg=document.getElementById('dr');if(!dlg)return;
+  var list=document.getElementById('dr-list');if(!list)return;
+  var cnt=document.getElementById('dr-cnt');
+  if(cnt)cnt.textContent=zones.length+(zones.length===1?' zone':' zones');
+  if(!zones.length){
+    list.innerHTML='<div class="dr-empty">No restricted zones found in drawn area.</div>';
+  }else{
+    var h='',lastCat=-1;
+    zones.forEach(function(z){
+      if(z.cat!==lastCat){
+        if(lastCat>=0)h+='</div>';
+        h+='<div class="dr-group"><div class="dr-ghead">'+z.f+'</div>';
+        lastCat=z.cat;
+      }
+      h+='<div class="dr-item"><span class="dr-tag">'+z.tag+'</span>'
+        +'<span class="dr-zid">'+z.zid+'</span></div>';
+    });
+    if(lastCat>=0)h+='</div>';
+    list.innerHTML=h;
+  }
+  dlg.style.display='flex';
+}
+
+function _copyIds(){
+  if(!_drz.length)return;
+  var ids=_drz.map(function(z){return z.zid;}).join(' ');
+  var txt='SET_SECURE_CONFIG ZONE_UNLOCK '+ids;
+  var btn=document.getElementById('dr-cp');
+  function ack(){
+    if(!btn)return;
+    var orig=btn.textContent;
+    btn.textContent='✓ Copied!';
+    setTimeout(function(){btn.textContent=orig;},1500);
+  }
+  if(navigator.clipboard){navigator.clipboard.writeText(txt).then(ack);}
+  else{
+    var ta=document.createElement('textarea');ta.value=txt;
+    ta.style.cssText='position:fixed;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');
+    document.body.removeChild(ta);ack();
+  }
+}
+window._copyIds=_copyIds;
+
+// ── Map init ──────────────────────────────────────────────────────────────────
 function _init(){
   var mp=window['__MAP__'];
   if(!mp){setTimeout(_init,100);return;}
+  _mp=mp;
 
-  // Restrict to one world copy
   mp.setMaxBounds([[-90,-180],[90,180]]);
   mp.options.maxBoundsViscosity=1.0;
   mp.setMinZoom(2);
 
-  // Find tile layers for base map control
   var base={};
   mp.eachLayer(function(l){
     if(!l._url)return;
     if(l._url.indexOf('Street_Map')>-1)base['Streets']=l;
     else if(l._url.indexOf('Imagery')>-1)base['Satellite']=l;
   });
-  // Only keep the first base layer visible; pill toggle handles the rest
   var _bk=Object.keys(base);
   _bk.forEach(function(name,i){if(i>0&&mp.hasLayer(base[name]))mp.removeLayer(base[name]);});
 
-  // Create one layerGroup per category
   var overlays={};
   ZONE_CATS.forEach(function(c){
-    var lg=L.layerGroup().addTo(mp);
-    _fgs[c.cat]=lg;
-    overlays[c.label]=lg;
+    var lg=L.layerGroup().addTo(mp);_fgs[c.cat]=lg;overlays[c.label]=lg;
   });
 
-  // Render all zones from ZONE_DATA
   var cv=L.canvas();
   ZONE_DATA.forEach(function(z,zi){
     var st=CAT_STYLES[z.cat];
     var opts={color:st[1],fillColor:st[0],weight:st[2],opacity:.85,fillOpacity:st[3],renderer:cv};
-    var layer;
-    if(z.t==='c'){
-      layer=L.circle([z.clat,z.clon],Object.assign({radius:z.r},opts));
-    }else{
-      layer=L.polygon(z.pts,opts);
-    }
+    var layer=(z.t==='c')
+      ?L.circle([z.clat,z.clon],Object.assign({radius:z.r},opts))
+      :L.polygon(z.pts,opts);
     _l[zi]=layer;
     if(_fgs[z.cat])_fgs[z.cat].addLayer(layer);
   });
 
-  // Unified layer control (tiles + zone categories)
   L.control.layers(base,overlays,{collapsed:false}).addTo(mp);
   _styleCtrl(mp,base);
 
-  // Events
   _tt=document.getElementById('zt');
+
+  mp.on('click',function(e){
+    if(!_dMode)return;
+    _addVert(e.latlng.lat,e.latlng.lng);
+  });
   mp.on('mousemove',function(e){
+    if(_dMode){
+      if(_tt)_tt.style.display='none';
+      _updatePrev(e.latlng.lat,e.latlng.lng);
+      return;
+    }
     var oe=e.originalEvent;
     _showTt(_at(e.latlng.lat,e.latlng.lng,false),oe.clientX,oe.clientY);
   });
@@ -310,11 +553,13 @@ function _init(){
   mp.on('contextmenu',function(e){
     var oe=e.originalEvent;
     L.DomEvent.preventDefault(oe);
+    if(_dMode){if(_dv.length>=3)_finishDraw();return;}
     if(_tt)_tt.style.display='none';
     _rclick(e.latlng.lat,e.latlng.lng,oe.clientX,oe.clientY);
   });
   document.addEventListener('keydown',function(e){
     if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();_showAll();}
+    if(e.key==='Escape'&&_dMode)_cancelDraw();
   });
 }
 
