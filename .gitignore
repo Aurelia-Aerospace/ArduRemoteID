@@ -1,4 +1,5 @@
 *generated/
+.env
 git-version.h
 *.bin
 *.elf
@@ -15,3 +16,5 @@ bin/
 RemoteIDModule/logs/
 RemoteIDModule/dl_temp/
 RemoteIDModule/build-*/
+RemoteIDModule/data/
+scripts/test_result
