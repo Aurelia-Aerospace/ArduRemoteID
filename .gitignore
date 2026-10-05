@@ -18,3 +18,5 @@ RemoteIDModule/dl_temp/
 RemoteIDModule/build-*/
 RemoteIDModule/data/
 scripts/test_result
+__pycache__*
+*.pytest_cache

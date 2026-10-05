@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 '''
-perform a secure parameter change on a ArduRemoteID node
+Send ZONE_OK / ZONE_LOCK / ZONE_CLEAR commands to an ArduRemoteID node.
 
 Two transport modes:
 
   DroneCAN (ArduPilot FC with MAVCAN tunnel):
-    python3 secure_command.py --target-node 121 --private-key rid_key /dev/ttyACM0 "OPTIONS=1"
+    python3 zone_rid_config.py --target-node 121 --private-key rid_key /dev/ttyACM0 --zone-ok 0xAABBCCDD
 
   MAVLink (PX4 FC relay, or direct to RID UART):
-    python3 secure_command.py --port /dev/ttyUSB0 --private-key rid_key "OPTIONS=1"
-    python3 secure_command.py --port udpin:0.0.0.0:14550 --private-key rid_key "OPTIONS=1"
+    python3 zone_rid_config.py --port /dev/ttyUSB0 --baudrate 57600 --private-key rid_key --zone-ok 0xAABBCCDD
+    python3 zone_rid_config.py --port udpin:0.0.0.0:14550 --private-key rid_key --zone-ok 0xAABBCCDD
+
+Commands:
+  --zone-ok    0xID ...   Permit arming inside these zone IDs
+  --zone-lock  0xID ...   Re-lock previously OK-ed zones
+  --zone-clear            Clear all zone overrides
 '''
 
 import time, sys, random, base64, struct
@@ -18,26 +23,29 @@ from argparse import ArgumentParser
 try:
     import monocypher
 except ImportError:
-    print("Please install monocypher with: python3 -m pip install pymonocypher")
+    print("Please install monocypher: python3 -m pip install pymonocypher")
     sys.exit(1)
+
+MAX_PAYLOAD = 156
 
 SECURE_COMMAND_GET_REMOTEID_SESSION_KEY = 1
 SECURE_COMMAND_SET_REMOTEID_CONFIG      = 6
 
-parser = ArgumentParser(description='secure_command')
-parser.add_argument("--bitrate",           default=1000000, type=int,   help="CAN bit rate")
-parser.add_argument("--node-id",           default=100,     type=int,   help="local CAN node ID")
-parser.add_argument("--target-node",       default=None,    type=int,   help="target DroneCAN node ID")
-parser.add_argument("--private-key",       default=None,    type=str,   help="private key file")
-parser.add_argument("--bus-num",           default=1,       type=int,   help="MAVCAN bus number")
-parser.add_argument("--signing-passphrase",default=None,                help="MAVLink2 signing passphrase")
-parser.add_argument("--timeout",           default=5,       type=float, help="reply timeout in seconds")
+parser = ArgumentParser(description='Send zone-permit commands to ArduRemoteID')
+parser.add_argument("--private-key", default=None,    type=str,   help="private key file (PRIVATE_KEYV1: format)")
+parser.add_argument("--timeout",     default=5,       type=float, help="reply timeout in seconds")
+parser.add_argument("--zone-ok",   nargs='+', metavar="ID")
+parser.add_argument("--zone-lock", nargs='+', metavar="ID")
+parser.add_argument("--zone-clear", action='store_true')
 # DroneCAN mode
-parser.add_argument("uri",    nargs='?',   default=None,    type=str,   help="CAN URI (DroneCAN mode)")
-parser.add_argument("paramop",             default=None,    type=str,   help="parameter operation string")
+parser.add_argument("uri",          nargs='?',         type=str,   help="CAN URI for DroneCAN mode (e.g. /dev/ttyACM0)")
+parser.add_argument("--target-node", default=None,    type=int,   help="RID DroneCAN node ID (DroneCAN mode)")
+parser.add_argument("--bitrate",     default=1000000, type=int,   help="CAN bit rate")
+parser.add_argument("--node-id",     default=100,     type=int,   help="local CAN node ID")
+parser.add_argument("--bus-num",     default=1,       type=int,   help="MAVCAN bus number")
 # MAVLink mode
-parser.add_argument("--port",              default=None,    type=str,   help="MAVLink connection (MAVLink mode)")
-parser.add_argument("--baudrate",          default=115200,  type=int,   help="serial baud rate (MAVLink mode)")
+parser.add_argument("--port",        default=None,    type=str,   help="MAVLink connection for MAVLink mode")
+parser.add_argument("--baudrate",    default=115200,  type=int,   help="serial baud rate (MAVLink mode)")
 
 
 def get_private_key(path):
@@ -46,13 +54,27 @@ def get_private_key(path):
     d = open(path, 'r').read().strip()
     prefix = "PRIVATE_KEYV1:"
     if not d.startswith(prefix):
-        print(f"Invalid key format, expected {prefix}...")
-        sys.exit(1)
+        print(f"Invalid key format, expected {prefix}..."); sys.exit(1)
     key = base64.b64decode(d[len(prefix):])
     if len(key) != 32:
-        print(f"ERROR: expected 32-byte key, got {len(key)}")
-        sys.exit(1)
+        print(f"ERROR: expected 32-byte key, got {len(key)}"); sys.exit(1)
     return key
+
+
+def build_payload(zone_ok, zone_lock, zone_clear):
+    cmds = []
+    for zid in (zone_ok or []):
+        cmds.append(f"ZONE_OK=0x{int(zid, 0):08x}")
+    for zid in (zone_lock or []):
+        cmds.append(f"ZONE_LOCK=0x{int(zid, 0):08x}")
+    if zone_clear:
+        cmds.append("ZONE_CLEAR")
+    if not cmds:
+        print("ERROR: no commands specified"); sys.exit(1)
+    payload = "\x00".join(cmds).encode('ascii')
+    if len(payload) > MAX_PAYLOAD:
+        print(f"ERROR: payload {len(payload)}B exceeds {MAX_PAYLOAD}B limit"); sys.exit(1)
+    return payload
 
 
 def sign(seq, op, data, session_key, private_key):
@@ -67,19 +89,17 @@ def sign(seq, op, data, session_key, private_key):
 def run_dronecan(args, payload, private_key):
     import dronecan
 
-    SK_OP  = dronecan.dronecan.remoteid.SecureCommand.Request().SECURE_COMMAND_GET_REMOTEID_SESSION_KEY
+    SK_OP = dronecan.dronecan.remoteid.SecureCommand.Request().SECURE_COMMAND_GET_REMOTEID_SESSION_KEY
     CFG_OP = dronecan.dronecan.remoteid.SecureCommand.Request().SECURE_COMMAND_SET_REMOTEID_CONFIG
 
-    session_key  = [None]
-    sequence     = [random.randint(0, 0xFFFFFFFF)]
-    done         = [False]
-    last_sk_req  = [0]
-    last_cfg     = [0]
+    session_key = [None]
+    sequence    = [random.randint(0, 0xFFFFFFFF)]
+    done        = [False]
+    last_sk_req = [0]
+    last_cfg    = [0]
 
     node = dronecan.make_node(args.uri, node_id=args.node_id, bitrate=args.bitrate)
     node.can_driver.set_bus(args.bus_num)
-    if args.signing_passphrase is not None:
-        node.can_driver.set_signing_passphrase(args.signing_passphrase)
     dronecan.app.node_monitor.NodeMonitor(node)
 
     def on_sk(reply):
@@ -90,9 +110,9 @@ def run_dronecan(args, payload, private_key):
 
     def on_cfg(reply):
         if not reply:
-            print("Config change timed out"); sys.exit(1)
+            print("Config timed out"); sys.exit(1)
         results = {0:"ACCEPTED",1:"TEMPORARILY_REJECTED",2:"DENIED",3:"UNSUPPORTED",4:"FAILED"}
-        print(f"Got change response: {results.get(reply.response.result, 'invalid')}")
+        print(f"Result: {results.get(reply.response.result, 'invalid')}")
         done[0] = True
         sys.exit(reply.response.result)
 
@@ -108,17 +128,15 @@ def run_dronecan(args, payload, private_key):
     def send_cfg():
         last_cfg[0] = time.time()
         if private_key:
-            sig     = sign(sequence[0], CFG_OP, payload, bytes(session_key[0]), private_key)
-            data    = payload + sig
-            sig_len = len(sig)
+            sig  = sign(sequence[0], CFG_OP, payload, bytes(session_key[0]), private_key)
+            data = payload + sig; sig_len = len(sig)
         else:
-            data    = payload
-            sig_len = 0
+            data = payload; sig_len = 0
         node.request(dronecan.dronecan.remoteid.SecureCommand.Request(
             sequence=sequence[0], operation=CFG_OP, sig_length=sig_len, data=data),
             args.target_node, on_cfg, timeout=args.timeout)
         sequence[0] = (sequence[0] + 1) % (1 << 32)
-        print(f"Requested config change (data={len(payload)}B sig={sig_len}B)")
+        print(f"Sent SET_REMOTEID_CONFIG (data={len(payload)}B sig={sig_len}B)")
 
     def update():
         now = time.time()
@@ -147,7 +165,7 @@ def run_mavlink(args, payload, private_key):
     session_key = b'\x00' * 8
     sequence    = random.randint(0, 0xFFFFFFFF)
 
-    mav = mavutil.mavlink_connection(args.port, baud=args.baudrate, dialect='ardupilotmega')
+    mav = mavutil.mavlink_connection(args.port, baud=args.baudrate)
     mav.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_QUADROTOR,
                            mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA, 0, 0, 0)
     if not mav.wait_heartbeat(timeout=15):
@@ -163,11 +181,11 @@ def run_mavlink(args, payload, private_key):
         return None
 
     def send_cmd(seq, op, data_bytes, sig_bytes):
-        buf = bytearray(data_bytes) + bytearray(sig_bytes)
-        buf += bytearray(220 - len(buf))
+        payload_buf = bytearray(data_bytes) + bytearray(sig_bytes)
+        payload_buf += bytearray(220 - len(payload_buf))
         mav.mav.secure_command_send(
             mav.target_system, mav.target_component,
-            seq, op, len(data_bytes), len(sig_bytes), buf)
+            seq, op, len(data_bytes), len(sig_bytes), payload_buf)
 
     if private_key:
         sig = sign(sequence, SECURE_COMMAND_GET_REMOTEID_SESSION_KEY, b'', b'', private_key)
@@ -192,7 +210,7 @@ def run_mavlink(args, payload, private_key):
             break
 
     if private_key:
-        sig     = sign(sequence, SECURE_COMMAND_SET_REMOTEID_CONFIG, payload, session_key, private_key)
+        sig = sign(sequence, SECURE_COMMAND_SET_REMOTEID_CONFIG, payload, session_key, private_key)
         sig_len = len(sig)
     else:
         sig = b''; sig_len = 0
@@ -204,7 +222,8 @@ def run_mavlink(args, payload, private_key):
     if not reply:
         sys.exit("Timed out waiting for reply")
     results = {0:"ACCEPTED",1:"TEMPORARILY_REJECTED",2:"DENIED",3:"UNSUPPORTED",4:"FAILED"}
-    print(f"Got change response: {results.get(reply.result, f'unknown({reply.result})')}")
+    status = results.get(reply.result, f"unknown({reply.result})")
+    print(f"Result: {status}")
     sys.exit(reply.result)
 
 
@@ -213,25 +232,23 @@ def run_mavlink(args, payload, private_key):
 def main():
     args = parser.parse_args()
 
-    if args.paramop is None:
-        parser.error("paramop argument is required")
+    if not args.zone_ok and not args.zone_lock and not args.zone_clear:
+        parser.print_help(); sys.exit(1)
 
     if args.port and args.uri:
         sys.exit("ERROR: specify either --port (MAVLink) or uri (DroneCAN), not both")
     if not args.port and not args.uri:
         sys.exit("ERROR: specify --port (MAVLink mode) or uri positional (DroneCAN mode)")
 
-    if not args.port and args.target_node is None:
-        sys.exit("ERROR: --target-node required for DroneCAN mode")
-
-    payload     = args.paramop.encode('utf-8')
+    payload     = build_payload(args.zone_ok, args.zone_lock, args.zone_clear)
     private_key = get_private_key(args.private_key)
-
-    print(f"Payload ({len(payload)} bytes): {args.paramop!r}")
+    print(f"Payload ({len(payload)} bytes): {payload.decode()!r}")
 
     if args.port:
         run_mavlink(args, payload, private_key)
     else:
+        if args.target_node is None:
+            sys.exit("ERROR: --target-node required for DroneCAN mode")
         run_dronecan(args, payload, private_key)
 
 
