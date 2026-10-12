@@ -66,7 +66,11 @@ uint8_t Transport::status_check(const char *&reason)
         status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
 
-    if ((last_operator_id_ms == 0 || now_ms - last_operator_id_ms > max_age_other_ms)) {
+    // OP_ID is not required under FAA 14 CFR § 89.305 when operating with a serial number
+    const bool using_serial_number = g.have_basic_id_info() &&
+        (g.id_type == MAV_ODID_ID_TYPE_SERIAL_NUMBER);
+    if (!using_serial_number &&
+        (last_operator_id_ms == 0 || now_ms - last_operator_id_ms > max_age_other_ms)) {
         ret += "OP_ID ";
         status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
