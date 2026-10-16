@@ -859,6 +859,7 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
         _ota_is_spiffs = (req.data.len >= 5) && (req.data.data[4] == 1);
 
         if (_ota_is_spiffs) {
+#if defined(BOARD_AURELIA_RID_S3)
             _ota_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
                                                   ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
             if (_ota_part == nullptr) {
@@ -886,6 +887,10 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
             Serial.printf("OTA zones: ready\n");
             reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_ACCEPTED;
             goto send_reply;
+#else
+            _ota_show_fail = true;
+            goto not_supported;
+#endif
         }
 
         // Firmware OTA (original path)
@@ -932,6 +937,7 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
         }
 
         if (_ota_is_spiffs) {
+#if defined(BOARD_AURELIA_RID_S3)
             if (!last) {
                 reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_ACCEPTED;
                 dronecan_send_secure_reply(ins, transfer, reply);
@@ -978,6 +984,10 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
             esp_wifi_start();
             reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_ACCEPTED;
             goto send_reply;
+#else
+            _ota_show_fail = true;
+            goto not_supported;
+#endif
         }
 
         if (!last) {
@@ -1049,6 +1059,7 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
     }
     case DRONECAN_REMOTEID_SECURECOMMAND_REQUEST_SECURE_COMMAND_SET_REMOTEID_CONFIG: {
         //Serial.printf("SECURE_COMMAND_SET_REMOTEID_CONFIG\n");
+#if defined(BOARD_AURELIA_RID_S3)
         int16_t data_len = req.data.len - req.sig_length;
         req.data.data[data_len] = 0;
         /*
@@ -1076,9 +1087,17 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
             command += cmdlen+1;
             data_len -= cmdlen+1;
         }
+#else
+        goto not_supported;
+#endif
         break;
     }
     }
+
+not_supported:
+    Serial.printf("OTA zones: not supported!: %s\n", esp_err_to_name(ESP_ERR_NOT_FOUND));
+    reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_UNSUPPORTED;
+    goto send_reply;
 
 send_reply:
     uint8_t buffer[UAVCAN_PROTOCOL_PARAM_GETSET_RESPONSE_MAX_SIZE] {};
