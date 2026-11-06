@@ -7,6 +7,9 @@
 
 #define READ_FAIL_MAX 30
 
+// DroneCAN ArmStatus ODID_ARM_STATUS_FAIL_FLYING_NOT_ALLOWED; our MAVLink XML stops at 1, the value is the same on both links
+#define ODID_ARM_STATUS_FAIL_FLYING_NOT_ALLOWED 3
+
 /*
   abstraction for opendroneid transports
  */
@@ -16,7 +19,14 @@ public:
     Transport();
     virtual void init(void) = 0;
     virtual void update(void) = 0;
-    uint8_t status_check(const char *&reason);
+    uint8_t status_check(const char *&reason, bool zone_locked = false);
+
+    // failed-check status: 3 only for a locked-zone hit at a valid position, 1 for everything else; never 2 (FAIL_GPS)
+    static uint8_t fail_status(bool zone_locked_at_valid_position)
+    {
+        return zone_locked_at_valid_position ? ODID_ARM_STATUS_FAIL_FLYING_NOT_ALLOWED
+                                             : MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
+    }
 
     const mavlink_open_drone_id_location_t &get_location(void) const
     {

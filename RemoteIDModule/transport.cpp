@@ -23,7 +23,7 @@ mavlink_open_drone_id_authentication_t Transport::authentication;
 mavlink_open_drone_id_self_id_t Transport::self_id;
 mavlink_open_drone_id_system_t Transport::system;
 mavlink_open_drone_id_operator_id_t Transport::operator_id;
-uint8_t Transport::fl_status = 0;
+uint8_t Transport::fl_status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;  // not GOOD before the first check
 
 Transport::Transport()
 {
@@ -32,9 +32,15 @@ Transport::Transport()
 /*
   check we are OK to fly
  */
-uint8_t Transport::status_check(const char *&reason)
+uint8_t Transport::status_check(const char *&reason, bool zone_locked)
 {
-    uint8_t status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
+    const uint32_t max_age_location_ms = 3000;
+    const uint32_t max_age_other_ms = 22000;
+    const uint32_t now_ms = millis();
+    const bool location_ok = last_location_ms != 0 && now_ms - last_location_ms <= max_age_location_ms &&
+                             !(location.latitude == 0 && location.longitude == 0);
+
+    uint8_t status = fail_status(zone_locked && location_ok);
 
      //return status OK if we have enabled the force arm option
     if ((g.options & OPTIONS_BYPASS_RID_CHECKS)) {
@@ -45,25 +51,19 @@ uint8_t Transport::status_check(const char *&reason)
         return status;
     }
 
-    const uint32_t max_age_location_ms = 3000;
-    const uint32_t max_age_other_ms = 22000;
-    const uint32_t now_ms = millis();
-
     String ret = "";
 
-    if (last_location_ms == 0 || now_ms - last_location_ms > max_age_location_ms || location.latitude == 0 && location.longitude == 0) {
+    if (!location_ok) {
         ret += "LOC ";
     }
     if (!g.have_basic_id_info()) {
         // if there is no basic ID data stored in the parameters give warning. If basic ID data are streamed to RID device,
         // it will store them in the parameters
         ret += "ID ";
-        status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
 
     if ((last_self_id_ms == 0  || now_ms - last_self_id_ms > max_age_other_ms)) {
         ret += "SELF_ID ";
-        status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
 
     // OP_ID is not required under FAA 14 CFR § 89.305 when operating with a serial number
@@ -72,14 +72,12 @@ uint8_t Transport::status_check(const char *&reason)
     if (!using_serial_number &&
         (last_operator_id_ms == 0 || now_ms - last_operator_id_ms > max_age_other_ms)) {
         ret += "OP_ID ";
-        status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
 
     if ((last_system_ms == 0 || now_ms - last_system_ms > max_age_location_ms)) {
         // we use location age limit for system as the operator location needs to come in as fast
         // as the vehicle location for FAA standard
         ret += "SYS ";
-        status = MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
     }
 
     if ((system.operator_latitude == 0 && system.operator_longitude == 0)) {

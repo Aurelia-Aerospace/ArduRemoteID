@@ -298,7 +298,7 @@ void MAVLinkSerial::process_packet(mavlink_status_t &status, mavlink_message_t &
 
 void MAVLinkSerial::arm_status_send(void)
 {
-    const uint8_t status = parse_fail==nullptr?MAV_ODID_ARM_STATUS_GOOD_TO_ARM:MAV_ODID_ARM_STATUS_PRE_ARM_FAIL_GENERIC;
+    const uint8_t status = fl_status;  // same as DroneCAN ArmStatus: 0, 1 or 3 from status_check()
     const char *reason = parse_fail==nullptr?"":parse_fail;
     mavlink_msg_open_drone_id_arm_status_send(chan, status, reason);
 #if defined(BOARD_AURELIA_RID_S3)

@@ -1076,6 +1076,10 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
                     if (!flight_checks.zone_ok(strtoul(eq+1, nullptr, 0))) {
                         reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
                     }
+                } else if (strcmp(command, "ZONE_OK_UNTIL") == 0) {
+                    if (!flight_checks.zone_ok_until(eq+1)) {
+                        reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
+                    }
                 } else if (strcmp(command, "ZONE_LOCK") == 0) {
                     flight_checks.zone_lock(strtoul(eq+1, nullptr, 0));
                 } else if (strcmp(command, "ZONE_CLEAR") == 0) {
@@ -1092,14 +1096,14 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
 #endif
         break;
     }
+    default:
+        goto not_supported;
     }
+    goto send_reply;  // every case above set reply.result; without this they all fell into UNSUPPORTED
 
 not_supported:
     Serial.printf("OTA zones: not supported!: %s\n", esp_err_to_name(ESP_ERR_NOT_FOUND));
-    default:
-        goto not_supported;
     reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_UNSUPPORTED;
-    goto send_reply;  // every case above set reply.result; without this they all fell into UNSUPPORTED
     goto send_reply;
 
 send_reply:

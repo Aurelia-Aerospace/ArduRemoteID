@@ -71,6 +71,7 @@ Transport::Transport() {}
 struct TestTransport : public Transport {
     void init()   override {}
     void update() override {}
+    void set_system_time(uint32_t odid_ts, uint32_t rx_ms) { system.timestamp = odid_ts; last_system_ms = rx_ms; }
 };
 
 // ------------------------------------------------------------------
@@ -778,6 +779,60 @@ int main(int argc, char *argv[])
         std::string r5 = zone_run(39.8739, -104.6965);
         check(r5.find("APT_") != std::string::npos, "unlock: Denver re-blocked after zone_clear");
 
+        g.options = 0;
+    }
+
+    // ==================================================================
+    // 10b. ZONE DEADLINE (ZONE_OK_UNTIL) + arm status 3 vs 1
+    //      Only APT_L checked, so Denver is the single zone that can hit.
+    // ==================================================================
+    {
+        static const uint32_t ODID_EPOCH = 1546300800U;   // 2019-01-01, ODID System timestamp base
+        static const uint32_t NOW        = 1790000000U;   // 2026-09-21
+        g.options = OPTIONS_BYPASS_ALL_ZONES_MASK & ~OPTIONS_BYPASS_AIRPORT_L;
+        run1(t, fc, 39.8739, -104.6965);                  // load Denver tile
+        auto blocked = [&]() {
+            fc.update_location(39.8739, -104.6965);
+            return std::string(fc.is_flying_allowed().c_str()).find("APT_L") != std::string::npos;
+        };
+        stub_millis_ms = 100000;
+        auto valid_time = [&]() { t.set_system_time(NOW - ODID_EPOCH, stub_millis_ms - 500); };
+        valid_time();
+
+        check(blocked() && Transport::fail_status(fc.get_zone_locked()) == 3, "status: locked zone hit -> 3");
+        fc.update_location(0, 0);
+        check(std::string(fc.is_flying_allowed().c_str()) == "GPS " &&
+              Transport::fail_status(fc.get_zone_locked()) == 1, "status: no GPS -> 1, never 2");
+
+        check(fc.zone_ok_until("0x06a8f2eb,1790000100"), "deadline: ZONE_OK_UNTIL accepted");
+        check(!blocked(), "deadline: unlocked before deadline");
+        check(fc.zone_ok_until("0x06a8f2eb,1790000000"), "deadline: re-send accepted");
+        check(blocked() && fc.get_zone_locked(), "deadline: re-send overwrote until, deadline passed -> status 3");
+
+        check(fc.zone_ok_until("0x06a8f2eb,1790000100"), "deadline: re-armed");
+        t.set_system_time(NOW - ODID_EPOCH, stub_millis_ms - 3000);   // System message 3 s old
+        check(blocked() && Transport::fail_status(fc.get_zone_locked()) == 1, "deadline: stale time -> locked, status 1");
+        t.set_system_time(0, stub_millis_ms - 500);                    // clock not set
+        check(blocked() && !fc.get_zone_locked(), "deadline: zero timestamp -> locked, status 1");
+        t.set_system_time(1735689600U - ODID_EPOCH, stub_millis_ms - 500);  // 2025-01-01
+        check(blocked() && !fc.get_zone_locked(), "deadline: pre-2026 time -> locked, status 1");
+
+        fc.zone_ok(0x06a8f2ebU);                          // ZONE_OK: no deadline, needs no time
+        check(!blocked(), "deadline: ZONE_OK without deadline unlocks with no valid time");
+
+        const char *bad[] = {"", "0x06a8f2eb", "0x06a8f2eb,", ",1790000100", "0x,1790000100",
+                             " 0x06a8f2eb,1790000100", "0x06a8f2eb,1790000100 ", "0x06a8f2eb,17900x",
+                             "0x06a8f2eb,-1", "0x06a8f2eb,+1790000100", "0x06a8f2eb,0",
+                             "0x106a8f2eb,1790000100", "0x06a8f2eb,4294967296", "0x06a8f2eb,1,2"};
+        for (const char *b : bad) {
+            check(!fc.zone_ok_until(b), ("malformed ZONE_OK_UNTIL rejected: '" + std::string(b) + "'").c_str());
+        }
+        valid_time();
+        check(!blocked(), "malformed: rejected commands left the no-deadline unlock untouched");
+
+        fc.zone_clear();
+        t.set_system_time(0, 0);
+        stub_millis_ms = 0;
         g.options = 0;
     }
 

@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "parameters.h"
 
 // Static member definitions
@@ -21,8 +22,10 @@ int8_t                  FlightChecks::cached_lat_tile;
 int8_t                  FlightChecks::cached_lon_tile;
 uint8_t*                FlightChecks::tile_cache;
 uint32_t                FlightChecks::tile_cache_bytes;
-uint32_t                FlightChecks::unlocked_zones[32];
+FlightChecks::UnlockedZone FlightChecks::unlocked_zones[32];
 uint8_t                 FlightChecks::n_unlocked;
+uint32_t                FlightChecks::now_s;
+bool                    FlightChecks::zone_locked;
 
 uint32_t            FlightChecks::last_scan_us;
 
@@ -167,46 +170,95 @@ void FlightChecks::load_zones_binary()
 void FlightChecks::load_unlocked_zones()
 {
     size_t len = sizeof(unlocked_zones);
-    if (!g.nvs_load_blob("zones_ok", unlocked_zones, &len)) {
-        n_unlocked = 0;
+    if (g.nvs_load_blob("zones_ok2", unlocked_zones, &len)) {
+        n_unlocked = uint8_t(len / sizeof(UnlockedZone));
         return;
     }
-    n_unlocked = uint8_t(len / sizeof(uint32_t));
+    // migrate the pre-deadline "zones_ok" blob (ids only): no deadline
+    uint32_t ids[32];
+    len = sizeof(ids);
+    n_unlocked = g.nvs_load_blob("zones_ok", ids, &len) ? uint8_t(len / sizeof(uint32_t)) : 0;
+    for (uint8_t i = 0; i < n_unlocked; i++) unlocked_zones[i] = {ids[i], 0};
 }
 
-bool FlightChecks::zone_ok(uint32_t zone_id)
+void FlightChecks::save_unlocked_zones()
 {
-    if (is_zone_unlocked(zone_id)) return true;
-    if (n_unlocked >= 32) return false;
-    unlocked_zones[n_unlocked++] = zone_id;
-    g.nvs_save_blob("zones_ok", unlocked_zones, n_unlocked * sizeof(uint32_t));
+    g.nvs_save_blob("zones_ok2", unlocked_zones, n_unlocked * sizeof(UnlockedZone));
+}
+
+int FlightChecks::find_unlocked(uint32_t zone_id)
+{
+    for (uint8_t i = 0; i < n_unlocked; i++) {
+        if (unlocked_zones[i].id == zone_id) return i;
+    }
+    return -1;
+}
+
+bool FlightChecks::zone_ok(uint32_t zone_id, uint32_t until)
+{
+    int i = find_unlocked(zone_id);
+    if (i < 0 && n_unlocked < 32) i = n_unlocked++;
+    if (i < 0) {
+        // full: reuse a slot whose deadline passed, only on a valid time
+        const uint32_t now = unix_time();
+        for (i = 0; i < 32 && !(now && unlocked_zones[i].until && now >= unlocked_zones[i].until); i++) {}
+        if (i == 32) return false;
+    }
+    unlocked_zones[i] = {zone_id, until};
+    save_unlocked_zones();
     return true;
+}
+
+bool FlightChecks::zone_ok_until(const char *arg)
+{
+    // strtoull skips spaces and takes a sign, so require a digit first; > UINT32_MAX (incl. ERANGE) is rejected
+    char *end;
+    if (!isdigit((unsigned char)arg[0])) return false;
+    const unsigned long long id = strtoull(arg, &end, 0);   // base 0: the backend sends 0x...
+    if (*end != ',' || id > UINT32_MAX || !isdigit((unsigned char)end[1])) return false;
+    const unsigned long long until = strtoull(end + 1, &end, 10);
+    if (*end != 0 || until == 0 || until > UINT32_MAX) return false;
+    return zone_ok(uint32_t(id), uint32_t(until));
 }
 
 bool FlightChecks::zone_lock(uint32_t zone_id)
 {
-    for (uint8_t i = 0; i < n_unlocked; i++) {
-        if (unlocked_zones[i] == zone_id) {
-            unlocked_zones[i] = unlocked_zones[--n_unlocked];
-            g.nvs_save_blob("zones_ok", unlocked_zones, n_unlocked * sizeof(uint32_t));
-            return true;
-        }
-    }
-    return false;
+    const int i = find_unlocked(zone_id);
+    if (i < 0) return false;
+    unlocked_zones[i] = unlocked_zones[--n_unlocked];
+    save_unlocked_zones();
+    return true;
 }
 
 void FlightChecks::zone_clear()
 {
     n_unlocked = 0;
-    g.nvs_save_blob("zones_ok", unlocked_zones, 0);
+    save_unlocked_zones();
 }
 
 bool FlightChecks::is_zone_unlocked(uint32_t zone_id)
 {
-    for (uint8_t i = 0; i < n_unlocked; i++) {
-        if (unlocked_zones[i] == zone_id) return true;
-    }
-    return false;
+    const int i = find_unlocked(zone_id);
+    if (i < 0) return false;
+    const uint32_t until = unlocked_zones[i].until;
+    return until == 0 || (now_s != 0 && now_s < until);
+}
+
+uint32_t FlightChecks::unix_time()
+{
+    const uint32_t ms = t.get_last_system_ms();
+    if (ms == 0 || millis() - ms >= 3000) return 0;
+    // ODID System timestamp: seconds since 2019-01-01 UTC; 0 (unset) lands before 2026 and is rejected below
+    const uint32_t now = t.get_system().timestamp + 1546300800U;
+    return now > 1767225600U ? now : 0;   // 2026-01-01: anything earlier is an unset clock
+}
+
+void FlightChecks::report_hit(uint32_t zone_id, uint8_t cat, uint32_t &reported_cats, String &ret, bool &truncated)
+{
+    // a deadline zone locked only because there is no valid time is a pre-arm failure (1), not a no-fly hit (3)
+    if (now_s != 0 || find_unlocked(zone_id) < 0) zone_locked = true;
+    if (!(reported_cats & (1U << cat))) append_tag(ret, CAT_MSG[cat], truncated);
+    reported_cats |= (1U << cat);
 }
 
 bool FlightChecks::checkEdge(double x, double y, double x1, double y1, double x2, double y2)
@@ -364,12 +416,10 @@ void FlightChecks::scan_tile(double lat, double lon, float alt_m,
             if (cat >= 17 || (g.options & CAT_BYPASS_BIT[cat])) continue;
             if (is_zone_unlocked(zone_id))               continue;
             if (floor_m > 0 && alt_m < (float)floor_m)  continue;
-            if (reported_cats & (1U << cat))             continue;
+            if ((reported_cats & (1U << cat)) && zone_locked) continue;
             double clat = clat_i * 1e-5, clon = clon_i * 1e-5;
-            if (check_circle(lat, lon, clat, clon, (double)radius)) {
-                append_tag(ret, CAT_MSG[cat], truncated);
-                reported_cats |= (1U << cat);
-            }
+            if (check_circle(lat, lon, clat, clon, (double)radius))
+                report_hit(zone_id, cat, reported_cats, ret, truncated);
         } else {  // polygon: floor_m(2)+n_pts(1)+clat(4)+clon(4)=11, then n_pts*4
             if (pos + 11 > tile_cache_bytes) break;
             uint16_t floor_m; uint8_t n_pts; int32_t clat_i, clon_i;
@@ -385,18 +435,17 @@ void FlightChecks::scan_tile(double lat, double lon, float alt_m,
             if (cat >= 17 || (g.options & CAT_BYPASS_BIT[cat])) continue;
             if (is_zone_unlocked(zone_id))               continue;
             if (floor_m > 0 && alt_m < (float)floor_m)  continue;
-            if (reported_cats & (1U << cat))             continue;
+            if ((reported_cats & (1U << cat)) && zone_locked) continue;
             double clat = clat_i * 1e-5, clon = clon_i * 1e-5;
-            if (check_polygon_deltas(lat, lon, clat, clon, delta_buf, n_pts)) {
-                append_tag(ret, CAT_MSG[cat], truncated);
-                reported_cats |= (1U << cat);
-            }
+            if (check_polygon_deltas(lat, lon, clat, clon, delta_buf, n_pts))
+                report_hit(zone_id, cat, reported_cats, ret, truncated);
         }
     }
 }
 
 String FlightChecks::is_flying_allowed()
 {
+    zone_locked = false;
     if (!spiffs_mounted) {
         if (g.options & OPTIONS_BYPASS_SPIFFS) return "";
         return "FS ";
@@ -413,12 +462,14 @@ String FlightChecks::is_flying_allowed()
 
     String ret;
     bool truncated = false;
+    now_s = unix_time();
 
     const uint32_t t0 = micros();
     scan_tile(origin.lat, origin.lon, origin_alt_m, ret, truncated);
     if (!truncated && !(g.options & OPTIONS_BYPASS_COUNTRY)) {
         if (is_inside_country(origin.lat, origin.lon)) {
             append_tag(ret, "COUNTRY ", truncated);
+            zone_locked = true;
         }
     }
     last_scan_us = micros() - t0;

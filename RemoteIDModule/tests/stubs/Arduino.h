@@ -10,7 +10,8 @@
 #define PI 3.14159265358979323846
 #endif
 
-static inline uint32_t millis() { return 0; }
+static uint32_t stub_millis_ms = 0;  // tests set the clock
+static inline uint32_t millis() { return stub_millis_ms; }
 static inline uint32_t micros() { return 0; }
 static inline void delay(int) {}
 

@@ -404,10 +404,12 @@ static void set_data(Transport &t)
 #if defined(BOARD_AURELIA_RID_S3)
     const char *flt_check = check_flight_area();
     const char *res = flt_check==nullptr?reason:flt_check;
+    const bool zone_locked = flight_checks.get_zone_locked();
 #else
     const char *res = reason;
+    const bool zone_locked = false;
 #endif
-    t.status_check(res);
+    t.status_check(res, zone_locked);
     t.set_parse_fail(res);
 
     arm_check_ok = (res == nullptr);

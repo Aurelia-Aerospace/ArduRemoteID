@@ -31,9 +31,12 @@ public:
     }
 
     bool get_files_read() const { return files_read; }
+    // last is_flying_allowed() hit a locked zone (status 3); false for a deadline zone with no valid time (status 1)
+    bool get_zone_locked() const { return zone_locked; }
     void init();
 
-    bool zone_ok(uint32_t zone_id);    // add to unlock list + persist to NVS
+    bool zone_ok(uint32_t zone_id, uint32_t until = 0);  // add/overwrite in unlock list + persist; until 0 = no deadline
+    bool zone_ok_until(const char *arg);                 // "<id>,<deadline_unix_s>", strict; false = rejected
     bool zone_lock(uint32_t zone_id);  // remove from unlock list + persist
     void zone_clear();                  // clear unlock list + persist
 
@@ -49,7 +52,11 @@ private:
                               const uint8_t *delta_buf, uint8_t n_pts);
     bool is_inside_country(double lat, double lon);
     void load_unlocked_zones();
+    void save_unlocked_zones();
+    int  find_unlocked(uint32_t zone_id);
     bool is_zone_unlocked(uint32_t zone_id);
+    void report_hit(uint32_t zone_id, uint8_t cat, uint32_t &reported_cats, String &ret, bool &truncated);
+    uint32_t unix_time();   // seconds, from the ODID System timestamp; 0 = no valid time
 
     bool spiffs_mounted = true;
 
@@ -70,8 +77,11 @@ private:
     static uint8_t*   tile_cache;
     static uint32_t   tile_cache_bytes;
 
-    static uint32_t   unlocked_zones[32];
+    struct UnlockedZone { uint32_t id, until; };
+    static UnlockedZone unlocked_zones[32];
     static uint8_t    n_unlocked;
+    static uint32_t   now_s;        // unix_time() taken once per is_flying_allowed()
+    static bool       zone_locked;
 
 public:
     static uint32_t   last_scan_us;   // scan duration set by is_flying_allowed(), read by bench
