@@ -167,23 +167,34 @@ void FlightChecks::load_zones_binary()
     files_read = true;
 }
 
+// "zones_ok2" = [count u8][count x UnlockedZone]: never zero-length, so an emptied list still reads back as
+// present and the old "zones_ok" (kept, not erased) is never re-imported
 void FlightChecks::load_unlocked_zones()
 {
-    size_t len = sizeof(unlocked_zones);
-    if (g.nvs_load_blob("zones_ok2", unlocked_zones, &len)) {
-        n_unlocked = uint8_t(len / sizeof(UnlockedZone));
+    uint8_t buf[1 + sizeof(unlocked_zones)];
+    size_t len = sizeof(buf);
+    if (g.nvs_load_blob("zones_ok2", buf, &len)) {
+        // a malformed blob loads as an empty list (fail closed), no migration
+        n_unlocked = (len >= 1 && buf[0] <= 32 && len == 1 + buf[0] * sizeof(UnlockedZone)) ? buf[0] : 0;
+        memcpy(unlocked_zones, buf + 1, n_unlocked * sizeof(UnlockedZone));
         return;
     }
     // migrate the pre-deadline "zones_ok" blob (ids only): no deadline
     uint32_t ids[32];
     len = sizeof(ids);
-    n_unlocked = g.nvs_load_blob("zones_ok", ids, &len) ? uint8_t(len / sizeof(uint32_t)) : 0;
+    n_unlocked = 0;
+    if (!g.nvs_load_blob("zones_ok", ids, &len)) return;
+    n_unlocked = uint8_t(len / sizeof(uint32_t));
     for (uint8_t i = 0; i < n_unlocked; i++) unlocked_zones[i] = {ids[i], 0};
+    save_unlocked_zones();
 }
 
-void FlightChecks::save_unlocked_zones()
+bool FlightChecks::save_unlocked_zones()
 {
-    g.nvs_save_blob("zones_ok2", unlocked_zones, n_unlocked * sizeof(UnlockedZone));
+    uint8_t buf[1 + sizeof(unlocked_zones)];
+    buf[0] = n_unlocked;
+    memcpy(buf + 1, unlocked_zones, n_unlocked * sizeof(UnlockedZone));
+    return g.nvs_save_blob("zones_ok2", buf, 1 + n_unlocked * sizeof(UnlockedZone));
 }
 
 int FlightChecks::find_unlocked(uint32_t zone_id)
@@ -205,29 +216,49 @@ bool FlightChecks::zone_ok(uint32_t zone_id, uint32_t until)
         if (i == 32) return false;
     }
     unlocked_zones[i] = {zone_id, until};
-    save_unlocked_zones();
-    return true;
+    return save_unlocked_zones();
+}
+
+// strtoull skips spaces and takes a sign, so require a digit first; base 0: the backend sends 0x...;
+// > UINT32_MAX (incl. ERANGE) is rejected; *end is left on the first unparsed char
+static bool parse_zone_id(const char *s, char **end, uint32_t &id)
+{
+    if (!isdigit((unsigned char)s[0])) return false;
+    const unsigned long long v = strtoull(s, end, 0);
+    id = uint32_t(v);
+    return v <= UINT32_MAX;
+}
+
+bool FlightChecks::zone_ok(const char *arg)
+{
+    char *end;
+    uint32_t id;
+    return parse_zone_id(arg, &end, id) && *end == 0 && zone_ok(id);
 }
 
 bool FlightChecks::zone_ok_until(const char *arg)
 {
-    // strtoull skips spaces and takes a sign, so require a digit first; > UINT32_MAX (incl. ERANGE) is rejected
     char *end;
-    if (!isdigit((unsigned char)arg[0])) return false;
-    const unsigned long long id = strtoull(arg, &end, 0);   // base 0: the backend sends 0x...
-    if (*end != ',' || id > UINT32_MAX || !isdigit((unsigned char)end[1])) return false;
+    uint32_t id;
+    if (!parse_zone_id(arg, &end, id) || *end != ',' || !isdigit((unsigned char)end[1])) return false;
     const unsigned long long until = strtoull(end + 1, &end, 10);
     if (*end != 0 || until == 0 || until > UINT32_MAX) return false;
-    return zone_ok(uint32_t(id), uint32_t(until));
+    return zone_ok(id, uint32_t(until));
 }
 
 bool FlightChecks::zone_lock(uint32_t zone_id)
 {
     const int i = find_unlocked(zone_id);
-    if (i < 0) return false;
+    if (i < 0) return true;   // not unlocked: nothing to do
     unlocked_zones[i] = unlocked_zones[--n_unlocked];
-    save_unlocked_zones();
-    return true;
+    return save_unlocked_zones();
+}
+
+bool FlightChecks::zone_lock(const char *arg)
+{
+    char *end;
+    uint32_t id;
+    return parse_zone_id(arg, &end, id) && *end == 0 && zone_lock(id);
 }
 
 void FlightChecks::zone_clear()

@@ -35,9 +35,11 @@ public:
     bool get_zone_locked() const { return zone_locked; }
     void init();
 
-    bool zone_ok(uint32_t zone_id, uint32_t until = 0);  // add/overwrite in unlock list + persist; until 0 = no deadline
+    bool zone_ok(uint32_t zone_id, uint32_t until = 0);  // add/overwrite in unlock list + persist; until 0 = no deadline; false = full or NVS failed
+    bool zone_ok(const char *arg);                       // ZONE_OK "<id>", strict; false = rejected
     bool zone_ok_until(const char *arg);                 // "<id>,<deadline_unix_s>", strict; false = rejected
-    bool zone_lock(uint32_t zone_id);  // remove from unlock list + persist
+    bool zone_lock(uint32_t zone_id);  // remove from unlock list + persist; false = NVS failed
+    bool zone_lock(const char *arg);   // ZONE_LOCK "<id>", strict; false = rejected
     void zone_clear();                  // clear unlock list + persist
 
 private:
@@ -52,7 +54,7 @@ private:
                               const uint8_t *delta_buf, uint8_t n_pts);
     bool is_inside_country(double lat, double lon);
     void load_unlocked_zones();
-    void save_unlocked_zones();
+    bool save_unlocked_zones();
     int  find_unlocked(uint32_t zone_id);
     bool is_zone_unlocked(uint32_t zone_id);
     void report_hit(uint32_t zone_id, uint8_t cat, uint32_t &reported_cats, String &ret, bool &truncated);

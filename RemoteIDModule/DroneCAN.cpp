@@ -1073,7 +1073,7 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
             if (eq != nullptr) {
                 *eq = 0;
                 if (strcmp(command, "ZONE_OK") == 0) {
-                    if (!flight_checks.zone_ok(strtoul(eq+1, nullptr, 0))) {
+                    if (!flight_checks.zone_ok(eq+1)) {
                         reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
                     }
                 } else if (strcmp(command, "ZONE_OK_UNTIL") == 0) {
@@ -1081,7 +1081,9 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
                         reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
                     }
                 } else if (strcmp(command, "ZONE_LOCK") == 0) {
-                    flight_checks.zone_lock(strtoul(eq+1, nullptr, 0));
+                    if (!flight_checks.zone_lock(eq+1)) {
+                        reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
+                    }
                 } else if (strcmp(command, "ZONE_CLEAR") == 0) {
                     flight_checks.zone_clear();
                 } else if (!g.set_by_name_string(command, eq+1)) {
