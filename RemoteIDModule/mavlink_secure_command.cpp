@@ -138,6 +138,9 @@ void MAVLinkSerial::handle_secure_command(const mavlink_secure_command_t &pkt)
 #endif
                 if (!g.set_by_name_string(command, eq+1)) {
                     mav_printf(MAV_SEVERITY_INFO, "set %s failed", command);
+                } else if (strcmp(command, "ZONE_CLEAR") == 0) {
+                    // "ZONE_CLEAR=" as DroneCAN needs it (the backend sends this form); bare ZONE_CLEAR below still works
+                    flight_checks.zone_clear();
                     reply.result = MAV_RESULT_FAILED;
                 } else {
                     mav_printf(MAV_SEVERITY_INFO, "set %s OK", command);
