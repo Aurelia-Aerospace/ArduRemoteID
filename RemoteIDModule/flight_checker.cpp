@@ -75,7 +75,8 @@ void FlightChecks::init()
     free(tile_cache);   tile_cache        = nullptr;
     files_read        = false;
     n_tiles           = 0;
-    n_unlocked        = 0;
+    // load now, not on the first GPS fix: a ZONE_OK/ZONE_LOCK before the fix would save an empty list over NVS
+    load_unlocked_zones();
     cached_lat_tile   = -128;
     cached_lon_tile   = -128;
     origin            = {0, 0};
@@ -404,7 +405,6 @@ String FlightChecks::is_flying_allowed()
 
     if (!files_read) {
         load_zones_binary();
-        load_unlocked_zones();
         if (!files_read) {
             if (g.options & OPTIONS_BYPASS_SPIFFS) return "";
             return "FS ";
