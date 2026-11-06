@@ -33,7 +33,8 @@
 // Define the global Parameters object (normally in parameters.cpp)
 Parameters g;
 
-// In-memory NVS. A zero-length blob reads back as absent: the case the zones_ok2 count header guards against
+// In-memory NVS. A zero-length blob reads back as absent: the case the zones_ok2 count header guards against.
+// A blob larger than the buffer is a read error, not absent (ESP_ERR_NVS_INVALID_LENGTH)
 static std::map<std::string, std::vector<uint8_t>> stub_nvs;
 static bool stub_nvs_fail = false;
 bool Parameters::nvs_save_blob(const char *key, const void *buf, size_t len)
@@ -42,10 +43,12 @@ bool Parameters::nvs_save_blob(const char *key, const void *buf, size_t len)
     stub_nvs[key].assign((const uint8_t *)buf, (const uint8_t *)buf + len);
     return true;
 }
-bool Parameters::nvs_load_blob(const char *key, void *buf, size_t *len)
+bool Parameters::nvs_load_blob(const char *key, void *buf, size_t *len, bool *not_found)
 {
     auto it = stub_nvs.find(key);
-    if (it == stub_nvs.end() || it->second.empty() || it->second.size() > *len) return false;
+    const bool absent = it == stub_nvs.end() || it->second.empty();
+    if (not_found) *not_found = absent;
+    if (absent || it->second.size() > *len) return false;
     *len = it->second.size();
     memcpy(buf, it->second.data(), *len);
     return true;
@@ -873,6 +876,20 @@ int main(int argc, char *argv[])
         valid_time();
         check(!blocked(), "malformed: rejected commands left the no-deadline unlock untouched");
 
+        // a failed save answers FAILED and leaves RAM as NVS has it (no unlock until reboot)
+        stub_nvs_fail = true;
+        check(!fc.zone_lock(0x06a8f2ebU) && !blocked(), "save failure: ZONE_LOCK -> FAILED, zone stays unlocked");
+        check(!fc.zone_clear() && !blocked(), "save failure: ZONE_CLEAR -> FAILED, list kept");
+        stub_nvs_fail = false;
+        check(fc.zone_lock(0x06a8f2ebU) && blocked(), "save failure: setup, zone locked");
+        stub_nvs_fail = true;
+        check(!fc.zone_ok(0x06a8f2ebU) && blocked(), "save failure: ZONE_OK new entry -> FAILED, zone stays locked");
+        stub_nvs_fail = false;
+        check(fc.zone_ok(0x06a8f2ebU, NOW - 1) && blocked(), "save failure: setup, deadline passed");
+        stub_nvs_fail = true;
+        check(!fc.zone_ok(0x06a8f2ebU) && blocked(), "save failure: ZONE_OK overwrite -> FAILED, old deadline kept");
+        stub_nvs_fail = false;
+
         fc.zone_clear();
         t.set_system_time(0, 0);
         stub_millis_ms = 0;
@@ -894,6 +911,9 @@ int main(int argc, char *argv[])
         fc.zone_clear();
         check(denver_blocked(), "persist: clear + reboot -> list stays empty, no re-migration");
         check(stub_nvs.count("zones_ok"), "persist: old zones_ok kept, not erased");
+        stub_nvs["zones_ok2"].assign(300, 1);   // larger than the buffer: read error, not absent
+        check(denver_blocked(), "persist: zones_ok2 read error -> empty list, no migration");
+        check(stub_nvs["zones_ok2"].size() == 300, "persist: zones_ok2 read error -> nothing re-saved");
         stub_nvs.clear();
         g.options = 0;
     }
