@@ -173,12 +173,15 @@ void FlightChecks::load_unlocked_zones()
 {
     uint8_t buf[1 + sizeof(unlocked_zones)];
     size_t len = sizeof(buf);
-    if (g.nvs_load_blob("zones_ok2", buf, &len)) {
+    bool not_found = false;
+    if (g.nvs_load_blob("zones_ok2", buf, &len, &not_found)) {
         // a malformed blob loads as an empty list (fail closed), no migration
         n_unlocked = (len >= 1 && buf[0] <= 32 && len == 1 + buf[0] * sizeof(UnlockedZone)) ? buf[0] : 0;
         memcpy(unlocked_zones, buf + 1, n_unlocked * sizeof(UnlockedZone));
         return;
     }
+    n_unlocked = 0;
+    if (!not_found) return;   // read error (e.g. bad length): empty list (fail closed), no migration
     // migrate the pre-deadline "zones_ok" blob (ids only): no deadline
     uint32_t ids[32];
     len = sizeof(ids);

@@ -104,7 +104,7 @@ public:
     bool set_private_key(const uint8_t seed[32]);
 
     bool nvs_save_blob(const char *key, const void *buf, size_t len);   // host tests define an in-memory stub
-    bool nvs_load_blob(const char *key, void *buf, size_t *len);
+    bool nvs_load_blob(const char *key, void *buf, size_t *len, bool *not_found = nullptr);  // *not_found: key absent, not a read error
 
     static uint16_t param_count_float(void);
     static int16_t param_index_float(const Param *p);

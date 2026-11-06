@@ -525,9 +525,11 @@ bool Parameters::nvs_save_blob(const char *key, const void *buf, size_t len)
            nvs_commit(handle) == ESP_OK;
 }
 
-bool Parameters::nvs_load_blob(const char *key, void *buf, size_t *len)
+bool Parameters::nvs_load_blob(const char *key, void *buf, size_t *len, bool *not_found)
 {
-    return nvs_get_blob(handle, key, buf, len) == ESP_OK;
+    const esp_err_t err = nvs_get_blob(handle, key, buf, len);
+    if (not_found) *not_found = err == ESP_ERR_NVS_NOT_FOUND;
+    return err == ESP_OK;
 }
 
 bool Parameters::set_private_key(const uint8_t seed[32])
