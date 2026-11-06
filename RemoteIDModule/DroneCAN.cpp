@@ -150,7 +150,7 @@ void DroneCAN::arm_status_send(void)
     const char *reason = parse_fail==nullptr?"":parse_fail;
 
     arm_status.status = status;
-    arm_status.error.len = strlen(reason);
+    arm_status.error.len = strnlen(reason, sizeof(arm_status.error.data));
     strncpy((char*)arm_status.error.data, reason, sizeof(arm_status.error.data));
 
     const uint16_t len = dronecan_remoteid_ArmStatus_encode(&arm_status, buffer);
