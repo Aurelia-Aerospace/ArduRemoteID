@@ -21,6 +21,16 @@ public:
     virtual void update(void) = 0;
     uint8_t status_check(const char *&reason, bool zone_locked = false);
 
+    // fresh, non-zero position from a real fix: with GPS lost ArduPilot keeps sending the dead-reckoned
+    // AHRS location with status EMERGENCY and unknown horizontal accuracy, which is not a valid position
+    static bool location_ok(uint32_t now_ms)
+    {
+        return last_location_ms != 0 && now_ms - last_location_ms <= 3000 &&
+               !(location.latitude == 0 && location.longitude == 0) &&
+               location.horizontal_accuracy != MAV_ODID_HOR_ACC_UNKNOWN &&
+               location.status != MAV_ODID_STATUS_EMERGENCY;
+    }
+
     // failed-check status: 3 only for a locked-zone hit at a valid position, 1 for everything else; never 2 (FAIL_GPS)
     static uint8_t fail_status(bool zone_locked_at_valid_position)
     {

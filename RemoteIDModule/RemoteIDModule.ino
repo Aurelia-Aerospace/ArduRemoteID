@@ -177,8 +177,15 @@ const char *check_flight_area()
   will produce a valid pack
   returns nullptr on no error, or a string error
  */
+#if defined(BOARD_AURELIA_RID_S3)
+static bool scan_origin_fresh;   // this cycle's location encoded and handed to the flight checker
+#endif
+
 static const char *check_parse(void)
 {
+#if defined(BOARD_AURELIA_RID_S3)
+    scan_origin_fresh = false;
+#endif
     if (g.options & OPTIONS_BYPASS_RID_CHECKS) return nullptr;
     String ret = "";
 
@@ -193,6 +200,7 @@ static const char *check_parse(void)
 #if AP_DRONECAN_ENABLED && defined(BOARD_AURELIA_RID_S3)
             flight_checks.update_location(UAS_data.Location.Latitude, UAS_data.Location.Longitude,
                                           (float)UAS_data.Location.AltitudeGeo);
+            scan_origin_fresh = true;
 #endif
         }
     }
@@ -404,7 +412,8 @@ static void set_data(Transport &t)
 #if defined(BOARD_AURELIA_RID_S3)
     const char *flt_check = check_flight_area();
     const char *res = flt_check==nullptr?reason:flt_check;
-    const bool zone_locked = flight_checks.get_zone_locked();
+    // a hit on a stale origin (this cycle's location failed to encode) is not a valid-position hit: status 1, not 3
+    const bool zone_locked = flight_checks.get_zone_locked() && scan_origin_fresh;
 #else
     const char *res = reason;
     const bool zone_locked = false;

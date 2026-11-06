@@ -37,10 +37,11 @@ uint8_t Transport::status_check(const char *&reason, bool zone_locked)
     const uint32_t max_age_location_ms = 3000;
     const uint32_t max_age_other_ms = 22000;
     const uint32_t now_ms = millis();
-    const bool location_ok = last_location_ms != 0 && now_ms - last_location_ms <= max_age_location_ms &&
-                             !(location.latitude == 0 && location.longitude == 0);
+    // LOC (pre-arm) keeps the plain freshness rule; only a status-3 zone hit needs a real fix (location_ok)
+    const bool location_fresh = last_location_ms != 0 && now_ms - last_location_ms <= max_age_location_ms &&
+                                !(location.latitude == 0 && location.longitude == 0);
 
-    uint8_t status = fail_status(zone_locked && location_ok);
+    uint8_t status = fail_status(zone_locked && Transport::location_ok(now_ms));
 
      //return status OK if we have enabled the force arm option
     if ((g.options & OPTIONS_BYPASS_RID_CHECKS)) {
@@ -53,7 +54,7 @@ uint8_t Transport::status_check(const char *&reason, bool zone_locked)
 
     String ret = "";
 
-    if (!location_ok) {
+    if (!location_fresh) {
         ret += "LOC ";
     }
     if (!g.have_basic_id_info()) {
