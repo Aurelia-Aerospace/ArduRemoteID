@@ -17,6 +17,7 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <map>
 
 // ------------------------------------------------------------------
 // Stubs path is injected by -I in the Makefile
@@ -31,6 +32,24 @@
 
 // Define the global Parameters object (normally in parameters.cpp)
 Parameters g;
+
+// In-memory NVS. A zero-length blob reads back as absent: the case the zones_ok2 count header guards against
+static std::map<std::string, std::vector<uint8_t>> stub_nvs;
+static bool stub_nvs_fail = false;
+bool Parameters::nvs_save_blob(const char *key, const void *buf, size_t len)
+{
+    if (stub_nvs_fail) return false;
+    stub_nvs[key].assign((const uint8_t *)buf, (const uint8_t *)buf + len);
+    return true;
+}
+bool Parameters::nvs_load_blob(const char *key, void *buf, size_t *len)
+{
+    auto it = stub_nvs.find(key);
+    if (it == stub_nvs.end() || it->second.empty() || it->second.size() > *len) return false;
+    *len = it->second.size();
+    memcpy(buf, it->second.data(), *len);
+    return true;
+}
 
 // Set default distances matching production defaults
 static void init_params()
@@ -72,6 +91,11 @@ struct TestTransport : public Transport {
     void init()   override {}
     void update() override {}
     void set_system_time(uint32_t odid_ts, uint32_t rx_ms) { system.timestamp = odid_ts; last_system_ms = rx_ms; }
+    void set_location(uint8_t hacc, uint8_t status, uint32_t rx_ms)
+    {
+        location.latitude = 39.8739; location.longitude = -104.6965;
+        location.horizontal_accuracy = hacc; location.status = status; last_location_ms = rx_ms;
+    }
 };
 
 // ------------------------------------------------------------------
@@ -736,9 +760,9 @@ int main(int argc, char *argv[])
     // Denver LARGE airport zone_id=0x06a8f2eb, in_point=(39.8739,-104.6965)
     // MEDIUM CA airport  zone_id=0x1a1a015d, in_point=(34.9067,-117.8812)
     //
-    // run1() calls fc.init() which resets n_unlocked=0; in test context NVS
-    // is a no-op so we must call zone_ok/lock/clear *after* init and then
-    // call is_flying_allowed() directly (no re-init).
+    // run1() calls fc.init() which reloads the list from the in-memory NVS;
+    // call zone_ok/lock/clear *after* init and then call
+    // is_flying_allowed() directly (no re-init).
     {
         static const uint32_t DEN_ID = 0x06a8f2ebU;
         static const uint32_t MED_ID = 0x1a1a015dU;
@@ -800,6 +824,15 @@ int main(int argc, char *argv[])
         valid_time();
 
         check(blocked() && Transport::fail_status(fc.get_zone_locked()) == 3, "status: locked zone hit -> 3");
+        // status_check: fail_status(zone_locked && location_ok); a dead-reckoned position (GPS lost) is not valid
+        auto arm_status = [&]() { return Transport::fail_status(fc.get_zone_locked() && Transport::location_ok(stub_millis_ms)); };
+        t.set_location(MAV_ODID_HOR_ACC_10_METER, MAV_ODID_STATUS_AIRBORNE, stub_millis_ms - 500);
+        check(blocked() && arm_status() == 3, "status: zone hit at a GPS fix -> 3");
+        t.set_location(MAV_ODID_HOR_ACC_UNKNOWN, MAV_ODID_STATUS_AIRBORNE, stub_millis_ms - 500);
+        check(blocked() && arm_status() == 1, "status: zone hit, unknown horizontal accuracy -> 1");
+        t.set_location(MAV_ODID_HOR_ACC_10_METER, MAV_ODID_STATUS_EMERGENCY, stub_millis_ms - 500);
+        check(blocked() && arm_status() == 1, "status: zone hit, EMERGENCY (dead reckoning) -> 1");
+        t.set_location(MAV_ODID_HOR_ACC_UNKNOWN, 0, 0);
         fc.update_location(0, 0);
         check(std::string(fc.is_flying_allowed().c_str()) == "GPS " &&
               Transport::fail_status(fc.get_zone_locked()) == 1, "status: no GPS -> 1, never 2");
@@ -817,7 +850,7 @@ int main(int argc, char *argv[])
         t.set_system_time(1735689600U - ODID_EPOCH, stub_millis_ms - 500);  // 2025-01-01
         check(blocked() && !fc.get_zone_locked(), "deadline: pre-2026 time -> locked, status 1");
 
-        fc.zone_ok(0x06a8f2ebU);                          // ZONE_OK: no deadline, needs no time
+        check(fc.zone_ok("0x06a8f2eb"), "ZONE_OK accepted");   // no deadline, needs no time
         check(!blocked(), "deadline: ZONE_OK without deadline unlocks with no valid time");
 
         const char *bad[] = {"", "0x06a8f2eb", "0x06a8f2eb,", ",1790000100", "0x,1790000100",
@@ -827,12 +860,41 @@ int main(int argc, char *argv[])
         for (const char *b : bad) {
             check(!fc.zone_ok_until(b), ("malformed ZONE_OK_UNTIL rejected: '" + std::string(b) + "'").c_str());
         }
+        const std::vector<uint8_t> saved = stub_nvs["zones_ok2"];
+        const char *bad_id[] = {"", "abc", " 1", "-1", "+1", "0x", "0x06a8f2eb ", "1,2", "0x106a8f2eb", "4294967296"};
+        for (const char *b : bad_id) {
+            check(!fc.zone_ok(b), ("malformed ZONE_OK rejected: '" + std::string(b) + "'").c_str());
+            check(!fc.zone_lock(b), ("malformed ZONE_LOCK rejected: '" + std::string(b) + "'").c_str());
+        }
+        check(stub_nvs["zones_ok2"] == saved, "malformed: ZONE_OK/ZONE_LOCK changed nothing in NVS");
+        stub_nvs_fail = true;
+        check(!fc.zone_ok("0x06a8f2eb"), "ZONE_OK: NVS save failure -> FAILED");
+        stub_nvs_fail = false;
         valid_time();
         check(!blocked(), "malformed: rejected commands left the no-deadline unlock untouched");
 
         fc.zone_clear();
         t.set_system_time(0, 0);
         stub_millis_ms = 0;
+        g.options = 0;
+    }
+
+    // ==================================================================
+    // 10c. UNLOCK LIST PERSISTENCE: old "zones_ok" migrates once, an emptied
+    //      "zones_ok2" still reads back as present, so it is never re-imported
+    // ==================================================================
+    {
+        const uint32_t legacy[] = {0x06a8f2ebU};   // Denver
+        g.options = OPTIONS_BYPASS_ALL_ZONES_MASK & ~OPTIONS_BYPASS_AIRPORT_L;
+        stub_nvs.clear();
+        g.nvs_save_blob("zones_ok", legacy, sizeof(legacy));
+        auto denver_blocked = [&]() { return run1(t, fc, 39.8739, -104.6965).find("APT_L") != std::string::npos; };  // init = reboot
+        check(!denver_blocked(), "persist: old zones_ok migrated");
+        check(stub_nvs.count("zones_ok2"), "persist: migration saved zones_ok2 at once");
+        fc.zone_clear();
+        check(denver_blocked(), "persist: clear + reboot -> list stays empty, no re-migration");
+        check(stub_nvs.count("zones_ok"), "persist: old zones_ok kept, not erased");
+        stub_nvs.clear();
         g.options = 0;
     }
 
