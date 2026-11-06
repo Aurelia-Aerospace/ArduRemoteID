@@ -142,7 +142,9 @@ void MAVLinkSerial::handle_secure_command(const mavlink_secure_command_t &pkt)
                     }
                 } else if (strcmp(command, "ZONE_CLEAR") == 0) {
                     // "ZONE_CLEAR=" as DroneCAN needs it (the backend sends this form); bare ZONE_CLEAR below still works
-                    flight_checks.zone_clear();
+                    if (!flight_checks.zone_clear()) {
+                        reply.result = MAV_RESULT_FAILED;
+                    }
                 } else
 #endif
                 if (!g.set_by_name_string(command, eq+1)) {
@@ -153,8 +155,8 @@ void MAVLinkSerial::handle_secure_command(const mavlink_secure_command_t &pkt)
                 }
             } else {
 #if defined(BOARD_AURELIA_RID_S3)
-                if (strcmp(command, "ZONE_CLEAR") == 0) {
-                    flight_checks.zone_clear();
+                if (strcmp(command, "ZONE_CLEAR") == 0 && !flight_checks.zone_clear()) {
+                    reply.result = MAV_RESULT_FAILED;
                 }
 #endif
             }

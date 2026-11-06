@@ -1085,7 +1085,9 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
                         reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
                     }
                 } else if (strcmp(command, "ZONE_CLEAR") == 0) {
-                    flight_checks.zone_clear();
+                    if (!flight_checks.zone_clear()) {
+                        reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
+                    }
                 } else if (!g.set_by_name_string(command, eq+1)) {
                     reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_FAILED;
                 }

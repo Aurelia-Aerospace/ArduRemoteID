@@ -40,7 +40,7 @@ public:
     bool zone_ok_until(const char *arg);                 // "<id>,<deadline_unix_s>", strict; false = rejected
     bool zone_lock(uint32_t zone_id);  // remove from unlock list + persist; false = NVS failed
     bool zone_lock(const char *arg);   // ZONE_LOCK "<id>", strict; false = rejected
-    void zone_clear();                  // clear unlock list + persist
+    bool zone_clear();                  // clear unlock list + persist; false = NVS failed
 
 private:
     bool checkEdge(double x, double y, double x1, double y1, double x2, double y2);

@@ -185,7 +185,6 @@ void FlightChecks::load_unlocked_zones()
     // migrate the pre-deadline "zones_ok" blob (ids only): no deadline
     uint32_t ids[32];
     len = sizeof(ids);
-    n_unlocked = 0;
     if (!g.nvs_load_blob("zones_ok", ids, &len)) return;
     n_unlocked = uint8_t(len / sizeof(uint32_t));
     for (uint8_t i = 0; i < n_unlocked; i++) unlocked_zones[i] = {ids[i], 0};
@@ -210,6 +209,7 @@ int FlightChecks::find_unlocked(uint32_t zone_id)
 
 bool FlightChecks::zone_ok(uint32_t zone_id, uint32_t until)
 {
+    const uint8_t n = n_unlocked;
     int i = find_unlocked(zone_id);
     if (i < 0 && n_unlocked < 32) i = n_unlocked++;
     if (i < 0) {
@@ -218,8 +218,12 @@ bool FlightChecks::zone_ok(uint32_t zone_id, uint32_t until)
         for (i = 0; i < 32 && !(now && unlocked_zones[i].until && now >= unlocked_zones[i].until); i++) {}
         if (i == 32) return false;
     }
+    const UnlockedZone prev = unlocked_zones[i];
     unlocked_zones[i] = {zone_id, until};
-    return save_unlocked_zones();
+    if (save_unlocked_zones()) return true;
+    unlocked_zones[i] = prev;   // save failed: keep RAM == NVS
+    n_unlocked = n;
+    return false;
 }
 
 // strtoull skips spaces and takes a sign, so require a digit first; base 0: the backend sends 0x...;
@@ -253,8 +257,12 @@ bool FlightChecks::zone_lock(uint32_t zone_id)
 {
     const int i = find_unlocked(zone_id);
     if (i < 0) return true;   // not unlocked: nothing to do
+    const UnlockedZone prev = unlocked_zones[i];
     unlocked_zones[i] = unlocked_zones[--n_unlocked];
-    return save_unlocked_zones();
+    if (save_unlocked_zones()) return true;
+    unlocked_zones[i] = prev;   // save failed: keep RAM == NVS (the moved last entry is still in its slot)
+    n_unlocked++;
+    return false;
 }
 
 bool FlightChecks::zone_lock(const char *arg)
@@ -264,10 +272,13 @@ bool FlightChecks::zone_lock(const char *arg)
     return parse_zone_id(arg, &end, id) && *end == 0 && zone_lock(id);
 }
 
-void FlightChecks::zone_clear()
+bool FlightChecks::zone_clear()
 {
+    const uint8_t n = n_unlocked;
     n_unlocked = 0;
-    save_unlocked_zones();
+    if (save_unlocked_zones()) return true;
+    n_unlocked = n;   // save failed: entries are untouched, restoring the count restores the list
+    return false;
 }
 
 bool FlightChecks::is_zone_unlocked(uint32_t zone_id)
