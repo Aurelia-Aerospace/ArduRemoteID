@@ -1096,7 +1096,10 @@ void DroneCAN::handle_SecureCommand(CanardInstance* ins, CanardRxTransfer* trans
 
 not_supported:
     Serial.printf("OTA zones: not supported!: %s\n", esp_err_to_name(ESP_ERR_NOT_FOUND));
+    default:
+        goto not_supported;
     reply.result = DRONECAN_REMOTEID_SECURECOMMAND_RESPONSE_RESULT_UNSUPPORTED;
+    goto send_reply;  // every case above set reply.result; without this they all fell into UNSUPPORTED
     goto send_reply;
 
 send_reply:
