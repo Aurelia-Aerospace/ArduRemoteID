@@ -19,10 +19,16 @@ SIGN_KEY    ?= 24
 SPIFFS_ARG  ?=
 PART_SIZE   ?= $(APP_PARTITION_SIZE_C3)
 
+# Aurelia key pair: the public key goes in ROMFS (PUBLIC_KEY4 on first boot), the private one signs fw + SPIFFS
+# dev build: make aurelia-rid-c3 AURELIA_PUB=$HOME/aurelia-keys/dev/rid/AureliaDev_public_key.dat AURELIA_PRIV=$HOME/aurelia-keys/dev/rid/AureliaDev_private_key.dat (absolute paths, no ~)
+AURELIA_PUB  ?= public_keys/AureliaKeys_public_key1.dat
+AURELIA_PRIV ?= keys/AureliaKeys_private_key.dat
+ROMFS_KEYS   := $(filter-out public_keys/AureliaKeys_public_key1.dat,$(wildcard public_keys/*.dat)) public_keys/AureliaKeys_public_key1.dat=$(AURELIA_PUB)
+
 # ensure python tools are in $PATH
 export PATH := $(HOME)/.local/bin:$(PATH)
 
-.PHONY: headers spiffs
+.PHONY: headers spiffs romfs_files.h   # romfs always regenerated: a key switch must never reuse a stale ROMFS
 
 all: headers spiffs aurelia-rid-c3 aurelia-rid-s3 esp32s3dev esp32c3dev bluemark-db200 bluemark-db110 jw-tbd mro-rid jwrid-esp32s3 bluemark-db202 bluemark-db210 bluemark-db203 holybro-RemoteID CUAV-RID
 
@@ -88,10 +94,10 @@ headers: gitversion
 
 spiffs:
 	@echo "Generating spiffs"
-	@../scripts/spiffsgen.py 0x3D0000 spiffs/ spiffs_gen.bin keys/AureliaKeys_private_key.dat 25
+	@../scripts/spiffsgen.py 0x3D0000 spiffs/ spiffs_gen.bin $(AURELIA_PRIV) 25
 
-romfs_files.h: web/*.html web/js/*.js web/styles/*css web/images/*.jpg public_keys/*.dat
-	@../scripts/make_romfs.py romfs_files.h web/*.html web/js/*.js web/styles/*css web/images/*.jpg public_keys/*.dat
+romfs_files.h: web/*.html web/js/*.js web/styles/*css web/images/*.jpg public_keys/*.dat $(AURELIA_PUB)
+	@../scripts/make_romfs.py romfs_files.h web/*.html web/js/*.js web/styles/*css web/images/*.jpg $(ROMFS_KEYS)
 
 ArduRemoteID-%.bin: gitversion *.cpp *.ino *.h romfs_files.h
 	@echo "Building $* on $(CHIP)"
@@ -101,7 +107,7 @@ ArduRemoteID-%.bin: gitversion *.cpp *.ino *.h romfs_files.h
 	@echo "Merging $*"
 	@python3 $(ESPTOOL) --chip $(CHIP) merge_bin -o ArduRemoteID-$*.bin --flash_size $(FLASH_SIZE) 0x0 build/esp32.esp32.$(CHIP)/RemoteIDModule.ino.bootloader.bin 0x8000 build/esp32.esp32.$(CHIP)/RemoteIDModule.ino.partitions.bin 0xe000 $(BOOT_APP)/partitions/boot_app0.bin 0x10000 build/esp32.esp32.$(CHIP)/RemoteIDModule.ino.bin $(SPIFFS_ARG)
 	@mv build build-$*
-	@../scripts/sign_fw.py ArduRemoteID_$*_OTA.bin keys/AureliaKeys_private_key.dat $(SIGN_KEY)
+	@../scripts/sign_fw.py ArduRemoteID_$*_OTA.bin $(AURELIA_PRIV) $(SIGN_KEY)
 
 boards:
 	@echo "Listing boards"

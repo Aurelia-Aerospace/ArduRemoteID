@@ -67,5 +67,5 @@ if __name__ == '__main__':
         sys.exit(1)
     for i in range(2, len(sys.argv)):
         f = sys.argv[i]
-        flist.append((f, f))
+        flist.append(tuple(f.split('=', 1)) if '=' in f else (f, f))   # NAME=PATH embeds PATH as NAME
     create_embedded_h(sys.argv[1], flist)

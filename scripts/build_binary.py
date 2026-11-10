@@ -88,6 +88,59 @@ def _crc27(s):
 def make_id(cat, key):
     return (cat << 27) | _crc27(key)
 
+
+# zone_id contract: assigned once, never changed, never reused (unlocks are stored by id).
+# Registry line: "cat|key<TAB>zone_id[<TAB>lat5,lon5]". Commit it after every build.
+REGISTRY = HERE / "zone_id_registry.tsv"
+ANCHORED = {"prison", "stadium", "military"}  # keys built from coordinates or list position
+MOVE_M   = 200   # an anchored zone whose key changed but moved ≤ this keeps its id
+
+def _anchor(z):
+    s = z["shapes"][0]
+    pts = [s["c"]] if s["type"] == "circle" else s["pts"]
+    return (round(sum(p[0] for p in pts) / len(pts)), round(sum(p[1] for p in pts) / len(pts)))
+
+def _dist_m(a, b):
+    return math.hypot(a[0] - b[0], (a[1] - b[1]) * math.cos(math.radians(a[0] / 1e5))) * 1.1132
+
+def load_registry(path=REGISTRY):
+    reg = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").split("\n")[:-1]:   # not splitlines: some keys hold \x85
+            k, zid, *a = line.split("\t")
+            reg[k] = (int(zid), tuple(map(int, a[0].split(","))) if a else None)
+    return reg
+
+def save_registry(reg, path=REGISTRY):
+    path.write_text("".join(f"{k}\t{zid}" + (f"\t{a[0]},{a[1]}" if a else "") + "\n"
+                            for k, (zid, a) in sorted(reg.items())), encoding="utf-8")
+
+def assign_ids(zones, reg):
+    """Fills reg ("cat|key" -> (id, anchor)) for every tiled zone; existing entries never change id."""
+    by_key = {f'{z["cat"]}|{z["id"]}': z for z in zones if z["cat"] in CAT_NUM}
+    used = {zid for zid, _ in reg.values()}
+    gone = defaultdict(list)   # anchored keys missing from this build: their id may follow the moved zone
+    for k, (zid, a) in reg.items():
+        if a and k not in by_key:
+            gone[k.split("|", 1)[0]].append(k)
+    for k in sorted(by_key.keys() - reg.keys()):
+        cat_str, key = k.split("|", 1)
+        a = _anchor(by_key[k]) if cat_str in ANCHORED else None
+        # ponytail: linear scan of the gone list per new key; grid index if refreshes get huge
+        near = [g for g in gone[cat_str] if _dist_m(a, reg[g][1]) <= MOVE_M] if a else []
+        if near:
+            g = min(near, key=lambda g: _dist_m(a, reg[g][1]))
+            gone[cat_str].remove(g)
+            reg[k] = (reg.pop(g)[0], a)   # moved zone: the id follows it, the old key is retired
+            continue
+        cat, zid, n = CAT_NUM[cat_str], make_id(CAT_NUM[cat_str], key), 0
+        while zid in used:   # crc collision or a retired id: never share or reuse
+            n += 1
+            zid = make_id(cat, f"{key}#{n}")
+        used.add(zid)
+        reg[k] = (zid, a)
+    return reg
+
 def _tiles(lat_min, lat_max, lon_min, lon_max):
     t0l = int(math.floor(lat_min / TILE_DEG))
     t1l = int(math.floor(lat_max / TILE_DEG))
@@ -128,7 +181,7 @@ def enc_polygon(zid, floor_m, pts, max_pts):
                       zid, 1, floor_m, n, round(clat * 1e5), round(clon * 1e5), *deltas)
 
 
-def collect_zones(zones):
+def collect_zones(zones, reg):
     recs   = []
     counts = defaultdict(int)
     for z in zones:
@@ -136,7 +189,7 @@ def collect_zones(zones):
         cat = CAT_NUM.get(cat_str)
         if cat is None:
             continue  # "country" goes to flat section
-        zid     = make_id(cat, z["id"])
+        zid     = reg[f'{cat_str}|{z["id"]}'][0]
         mp      = MAX_PTS[cat]
         floor_m = min(65535, max(0, int(z.get("floor", 0))))
         for shape in z["shapes"]:
@@ -175,7 +228,8 @@ def collect_countries(zones):
 def main():
     print("=== Building zones.bin ===")
     zones          = json.loads(ZONES_ALL.read_text())
-    recs           = collect_zones(zones)
+    reg            = assign_ids(zones, load_registry())
+    recs           = collect_zones(zones, reg)
     country_section = collect_countries(zones)
 
     buckets = defaultdict(list)
@@ -214,6 +268,8 @@ def main():
     print(f"  + country section: {len(country_section)//1024} KB")
     print(f"  → {OUT}  ({total_size // 1024} KB)")
     assert total_size < 4 * 1024 * 1024, f"OVERFLOW: {total_size//1024} KB > 4096 KB"
+    save_registry(reg)
+    print(f"  → {REGISTRY}  ({len(reg)} ids; commit it with the build)")
 
 
 if __name__ == "__main__":

@@ -61,7 +61,13 @@ CAT_NUM = {
 }
 
 
+from build_binary import load_registry
+_REG = load_registry()
+
+
 def _make_id(cat_str, key):
+    if f"{cat_str}|{key}" in _REG:   # the id zones.bin really carries
+        return _REG[f"{cat_str}|{key}"][0]
     cat = CAT_NUM.get(cat_str, 31)
     return (cat << 27) | (zlib.crc32(key.encode()) & 0x07FFFFFF)
 
